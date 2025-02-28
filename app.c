@@ -25,8 +25,6 @@ void handler(void *arg)
 
         // Construct HTTP response
         tcp_write(conn->client_fd, buf, n); // Send responseb
-
-        runtime_yield();
     }
 }
 
