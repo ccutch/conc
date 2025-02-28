@@ -58,6 +58,11 @@ void runtime_sleep_write(int);
 // Wake up a coroutine by id if it is sleeping do to a sleep.
 void runtime_wake_up(size_t);
 
+// Run the runtime forever allowing for continuous execution.
+void runtime_run_forever(void);
+
+// Run the runtime until there are no more alive coroutines.
+void runtime_run_while_active(void);
 
 
 ////////////////////
@@ -78,8 +83,9 @@ typedef struct {
 } TcpConn;
 
 void tcp_listen(char *addr, int port, void (*fn)(void *conn));
-void tcp_read(int fd, char *buf, int size);
-void tcp_write(int fd, char *buf, int size);
+int tcp_read(int fd, char *buf, int size);
+int tcp_read_until(int fd, char *buf, int size, char *delim);
+int tcp_write(int fd, char *buf, int size);
 
 
 #ifdef APP_IMPLEMENTATION
@@ -150,7 +156,6 @@ void __attribute((naked)) runtime_resume(void *rsp)
     "    ret\n");
 }
 
-
 void runtime_finish_current(void)
 {
     if (active.items[current_ctx] == 0)
@@ -162,7 +167,7 @@ void runtime_finish_current(void)
 
     printf("polling for events\n");
     if (polls.count > 0) {
-        int result = poll(polls.items, polls.count, 0);
+        int result = poll(polls.items, polls.count, -1); // Wait for events
         assert(result >= 0);
         for (size_t i = 0; i < polls.count;) {
             if (polls.items[i].revents) {
@@ -176,11 +181,18 @@ void runtime_finish_current(void)
         }
     }
 
+    // Ensure we don't stop if there's at least one coroutine available
+    if (active.count == 0 && asleep.count > 0) {
+        printf("Waking up the first sleeping coroutine\n");
+        array_append(&active, asleep.items[0]);
+        array_remove(&asleep, 0);
+        array_remove(&polls, 0);
+    }
+
     assert(active.count > 0);
     current_ctx %= active.count;
     runtime_resume(contexts.items[active.items[current_ctx]].pointer);
 }
-
 
 #define STACK_SIZE 1024 * getpagesize()
 
@@ -248,17 +260,15 @@ typedef enum {
     SM_WRITE,
 } SleepMode;
 
-
 void runtime_switch_context(void *rsp, SleepMode sm, int fd) {
     contexts.items[active.items[current_ctx]].pointer = rsp;
 
     switch (sm) {
         case SM_NONE:
-            current_ctx += 1;
+            current_ctx = (current_ctx + 1) % active.count; // Rotate
             break;
 
         case SM_READ: {
-            printf("Coroutine %lu sleeping on fd %d (READ)\n", active.items[current_ctx], fd);
             array_append(&asleep, active.items[current_ctx]);
             struct pollfd poll = {.fd = fd, .events = POLLIN};
             array_append(&polls, poll);
@@ -266,7 +276,6 @@ void runtime_switch_context(void *rsp, SleepMode sm, int fd) {
         } break;
 
         case SM_WRITE: {
-            printf("Coroutine %lu sleeping on fd %d (WRITE)\n", active.items[current_ctx], fd);
             array_append(&asleep, active.items[current_ctx]);
             struct pollfd poll = {.fd = fd, .events = POLLOUT};
             array_append(&polls, poll);
@@ -277,15 +286,14 @@ void runtime_switch_context(void *rsp, SleepMode sm, int fd) {
             NOB_UNREACHABLE("Unknown sleep mode");
     }
 
+    // Non-blocking poll check
     if (polls.count > 0) {
-        printf("Polling for events...\n");
-        int result = poll(polls.items, polls.count, -1); // Use -1 to block
+        int result = poll(polls.items, polls.count, 0); // Use 0 to avoid blocking
         assert(result >= 0 && "poll failed");
 
         for (size_t i = 0; i < polls.count;) {
             if (polls.items[i].revents) {
                 size_t ctx = asleep.items[i];
-                printf("Waking up coroutine %lu\n", ctx);
                 array_remove(&polls, i);
                 array_remove(&asleep, i);
                 array_append(&active, ctx);
@@ -295,9 +303,11 @@ void runtime_switch_context(void *rsp, SleepMode sm, int fd) {
         }
     }
 
-    assert(active.count > 0 && "No active coroutines");
-    current_ctx %= active.count;
-    runtime_resume(contexts.items[active.items[current_ctx]].pointer);
+    // Ensure coroutines continue executing
+    if (active.count > 0) {
+        current_ctx %= active.count;
+        runtime_resume(contexts.items[active.items[current_ctx]].pointer);
+    }
 }
 
 void __attribute__((naked)) runtime_yield(void)
@@ -349,6 +359,16 @@ void __attribute__((naked)) runtime_sleep_write(int fd)
     "    jmp runtime_switch_context\n");
 }
 
+void runtime_run_forever(void)
+{
+    while (true) runtime_yield();
+}
+
+void runtime_run_while_active(void)
+{
+    while (runtime_count() > 1) runtime_yield();
+}
+
 
 /////////////////////
 // Networking Impl //
@@ -368,10 +388,17 @@ int tcp_nonblock(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+void tcp_handle_conn(void *arg)
+{
+    TcpConn *conn = (TcpConn*)arg;
+    conn->server->fn(conn);
+    runtime_yield();
+    close(conn->client_fd);
+    free(conn);
+}
 
 void _tcp_listen(void *arg)
 {
-
     TcpServer *server = (TcpServer*)arg;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(fd >= 0 && "Failed to create socket");
@@ -386,30 +413,25 @@ void _tcp_listen(void *arg)
     };
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "Failed to bind to socket\n");
+        perror("Failed to bind to socket");
         close(fd);
         return;
     }
 
     if (listen(fd, 128) < 0) {
-        fprintf(stderr, "Failed to listen to socket\n");
+        perror("Failed to listen on socket");
         close(fd);
         return;
     }
 
     if (tcp_nonblock(fd) < 0) {
-        fprintf(stderr, "Failed to unblock socket\n");
+        perror("Failed to set socket non-blocking");
         close(fd);
         return;
     }
 
     while (1) {
-        printf("Waiting for connection\n");
-
-        // Ensure that runtime_sleep_read actually suspends execution
-        runtime_sleep_read(fd);
-        
-        printf("Woke up from sleep, checking for connections\n");
+        runtime_sleep_read(fd); // Sleep until a new connection is ready
 
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -417,30 +439,25 @@ void _tcp_listen(void *arg)
         int conn_fd = accept(fd, (struct sockaddr *)&client_addr, &client_len);
         if (conn_fd < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                printf("No connections yet, going back to sleep\n");
-                continue;  // Go back to sleep until a connection is ready
+                continue; // No connection yet, sleep again
             }
-            perror("accept");
-            fprintf(stderr, "Failed to accept connection");
+            perror("accept failed");
             continue;
         }
 
         if (tcp_nonblock(conn_fd) < 0) {
-            fprintf(stderr, "Failed to set non-blocking mode for connection");
+            perror("Failed to set connection to non-blocking");
             close(conn_fd);
             continue;
         }
 
-        printf("New connection accepted: %d\n", conn_fd);
-
-        TcpConn conn = {
-            .server = server,
-            .client_fd = conn_fd,
-        };
-
-        runtime_run(server->fn, &conn);
+        TcpConn *conn = malloc(sizeof(TcpConn));
+        conn->server = server;
+        conn->client_fd = conn_fd;
+        runtime_run(tcp_handle_conn, conn);
     }
 }
+
 
 void tcp_listen(char *host, int port, void (*fn)(void*))
 {
@@ -451,35 +468,53 @@ void tcp_listen(char *host, int port, void (*fn)(void*))
     runtime_run(_tcp_listen, server);
 }
 
-
-void tcp_read(int fd, char *buf, int size)
+int tcp_read(int fd, char *buf, int size)
 {
-    while (1) {
-        int n = read(fd, buf, size);
-        if (n < 0) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_yield();
-                continue;
-            }
-        } else if (n == 0) {
-            return;
-        }
-    }
+    return tcp_read_until(fd, buf, size, "\0");
 }
 
-void tcp_write(int fd, char *buf, int size)
+int tcp_read_until(int fd, char *buf, int size, char *delim)
 {
-    while (1) {
-        int n = write(fd, buf, size);
+    int total_read = 0;
+    while (total_read < size - 1) { // Ensure room for null termination
+        int n = read(fd, buf + total_read, size - 1 - total_read);
         if (n < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_yield();
+                runtime_sleep_read(fd);
                 continue;
             }
+            perror("tcp_read failed");
+            return -1;
         } else if (n == 0) {
-            return;
+            return -1; // Connection closed
+        }
+        total_read += n;
+
+        // Check if we've received the end of an HTTP header (`\r\n\r\n`)
+        if (strstr(buf, delim)) {
+            break;
         }
     }
+    buf[total_read] = '\0'; // Ensure null-terminated string
+    return total_read;
+}
+
+int tcp_write(int fd, char *buf, int size)
+{
+    int total_written = 0;
+    while (total_written < size) {
+        int n = write(fd, buf + total_written, size - total_written);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_sleep_write(fd);
+                continue;
+            }
+            perror("tcp_write failed");
+            return -1;
+        }
+        total_written += n;
+    }
+    return total_written;
 }
 
 
