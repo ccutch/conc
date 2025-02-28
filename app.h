@@ -64,7 +64,6 @@ void runtime_run_forever(void);
 // Run the runtime until there are no more alive coroutines.
 void runtime_run_while_active(void);
 
-
 ////////////////////
 // Networking API //
 ////////////////////
@@ -252,7 +251,6 @@ void runtime_wake_up(size_t id)
         }
     }
 }
-
 
 typedef enum {
     SM_NONE = 0,

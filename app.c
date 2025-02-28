@@ -79,14 +79,14 @@ int main(void)
 
 // int main(void)
 // {
-    // App *app = new_application("./templates");
+//     App *app = new_application("./templates");
 
-    // app_var("current_profile", get_current_profile);
+//     app_var("current_profile", get_current_profile);
 
-    // app_serve(app, "/", "homepage.html");
-    // app_serve(app, "/{profile}", "profile.html");
-    // app_handler(app, "GET", "/name", handle_name);
-    // app_handler(app, "PUT", "/name", update_name);
+//     app_serve(app, "/", "homepage.html");
+//     app_serve(app, "/{profile}", "profile.html");
+//     app_handler(app, "GET", "/name", handle_name);
+//     app_handler(app, "PUT", "/name", update_name);
 
-    // return app_start(app, "localhost", 8080);
+//     return app_start(app, "localhost", 8080);
 // }

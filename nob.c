@@ -8,7 +8,7 @@ int main(int argc, char **argv)
     if (!nob_mkdir_if_not_exists("build")) return 1;
 
     Nob_Cmd cmd = {0};
-    nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", "build/app", "app.c");
+    nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", "build/run", "proto.c");
     if (!nob_cmd_run_sync(cmd)) return 1;
     
     return 0;
