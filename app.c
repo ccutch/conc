@@ -1,92 +1,81 @@
+
+// TODO: final version
+// #define APP_IMPLEMENTATION
+// #include "app.h"
+
+#define RUNTIME_IMPLEMENTATION
+#include "proto/runtime.h"
+
+#define HTTP_IMPLEMENTATION
+#include "proto/http.h"
+
+#define HTML_IMPLEMENTATION
+#include "proto/html.h"
+
+#define DB_IMPLEMENTATION
+#include "proto/db.h"
+
 #define APP_IMPLEMENTATION
-#include "app.h"
+#include "proto/app.h"
 
+// TODO move to app.h
+// static void app_render(Response *res, const char *template, void *data)
+// {
+//     char *html = html_render(template, data);
+//     http_write_header(res, 200);
+//     http_write_body(res, html);
+//     free(html);
+// }
 
-void counter(void *arg)
+typedef struct {
+    char *key;
+    char *value;
+} DataField;
+
+typedef struct {
+    DataField *fields;
+    int n;
+} ApiData;
+
+void handle_api_data(Application *app, Request *req, Response *res)
 {
-    long int n = (long int)arg;
-    for (int i = 0; i < n; ++i) {
-        printf("[%lu] %d\n", runtime_id(), i);
-        runtime_yield();
+    char buf[1024];
+    int n = http_read(buf, 1024);
+    if (n == -1) {
+        http_write_header(res, 400);
+        http_write_body(res, "Bad Request");
+        return;
     }
-}
 
-void handler(void *arg)
-{
-    TcpConn *conn = (TcpConn *)arg;
-
-    char buf[1024] = {0};
-
-    while (true) {
-        int n = tcp_read_until(conn->client_fd, buf, sizeof(buf) - 1, "\n"); // Read request
-        if (n == 0) break; // Connection closed
-
-        printf("Received: %s\n", buf); // Log the received request
-
-        // Construct HTTP response
-        tcp_write(conn->client_fd, buf, n); // Send responseb
+    DbQuery query = {0};
+    if (db_query_all(app->db, &query, "SELECT key, value FROM data") == -1) {
+        http_write_header(res, 500);
+        http_write_body(res, "Failed to find");
+        return;
     }
+    
+    ApiData data = {0};
+    for (int row = 0; row < n; row++) {
+        DataField field = {0};
+        if (db_scan(&query, &field.key, &field.value) == -1) {
+            http_write_header(res, 500);
+            http_write_body(res, "Failed to scan");
+            return;
+        }
+
+        slice_append(data, field);
+    }
+
+    app_render(res, "api-data.html", &data);
 }
 
 int main(void)
 {
-    runtime_init();
-    runtime_run(counter, (void*)10);
-    runtime_run(counter, (void*)20);
+    app_set("THEME", "dark");
 
-    nob_log(NOB_INFO, "Listening on localhost:9090");
-    tcp_listen("127.0.0.1", 9090, handler);
+    app_serve_dir("./public/");
+    app_serve("/", "homepage.html");
+    app_handle("GET", "/api/data", handle_api_data);
 
-    runtime_run_forever(); // Run forever
-    return 0;
+    app_start(8000);
 }
-
-
-// int handle_name(App *app, Request *req)
-// {
-//     char name[100];
-//     db_get(app->db, "name", name);
-
-//     fprintf(req->response, "%s", name);
-//     return 200;
-// }
-
-// int update_name(App *app, Request *req)
-// {
-//     char name[100];
-//     fscan(req->body, "%s", name);
-//     db_set(app->db, "name", name);
-
-//     fprintf(req->response, "%s", name);
-//     return 200;
-// }
-
-// typedef struct {
-//     char name[100];
-// } Profile;
-
-// void *get_current_profile(App *app, Request *req)
-// {
-//     char name[100];
-//     db_get(app->db, "name", name);
-
-//     Profile *profile = {
-//         .name = name,
-//     };
-
-//     return (void *)profile;
-// }
-
-// int main(void)
-// {
-//     App *app = new_application("./templates");
-
-//     app_var("current_profile", get_current_profile);
-
-//     app_serve(app, "/", "homepage.html");
-//     app_serve(app, "/{profile}", "profile.html");
-//     app_handler(app, "GET", "/name", handle_name);
-//     app_handler(app, "PUT", "/name", update_name);
-
-//     return app_start(app, "localhost", 8080);
-// }

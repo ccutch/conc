@@ -244,8 +244,8 @@ void runtime_wake_up(size_t id)
     printf("waking up coroutine %lu\n", id);
     for (size_t i = 0; i < asleep.count; ++i) {
         if (asleep.items[i] == id) {
-            array_remove(&asleep, id);
             array_remove(&polls, id);
+            array_remove(&asleep, id);
             array_append(&active, id);
             return;
         }
