@@ -1,5 +1,9 @@
-#define APP_IMPLEMENTATION
-#include "refactor/app.h"
+
+#define MEMORY_IMPLEMENTATION
+#include "../source/1-memory.h"
+
+#define RUNTIME_IMPLEMENTATION
+#include "../source/2-runtime.h"
 
 
 void counter(void *arg)

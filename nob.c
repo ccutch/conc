@@ -1,5 +1,11 @@
+
 #define NOB_IMPLEMENTATION
 #include "nob.h"
+
+
+int create_app_h_file(void);
+int alphabetical_cmp(const void *a, const void *b);
+
 
 int main(int argc, char **argv)
 {
@@ -7,22 +13,78 @@ int main(int argc, char **argv)
     
     if (!nob_mkdir_if_not_exists("build")) return 1;
 
+    // ignoring first argument (./nob)
+    (void)nob_shift_args(&argc, &argv);
 
-    // TCP echo server
-    Nob_Cmd cmd = {0};
-    nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", "build/test", "test.c");
-    if (!nob_cmd_run_sync(cmd)) return 1;
+    char *command;
+    if (argc < 1) command = "build";
+    else command = nob_shift_args(&argc, &argv);
 
-    // nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", "build/echo", "echo.c");
-    // if (!nob_cmd_run_sync(cmd)) return 1;
+    if (strcmp(command, "build") == 0)
+        return create_app_h_file();
+ 
+    if (strcmp(command, "run") == 0) {
+        if (argc < 1) {
+            nob_log(NOB_ERROR, "run command requires a argument");
+            return 1;
+        }
 
-    // nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", "build/proto", "proto.c");
-    // if (!nob_cmd_run_sync(cmd)) return 1;
+        char *example = nob_shift_args(&argc, &argv);
+        if (example == NULL) { 
+            nob_log(NOB_ERROR, "run command requires an example");
+            return 1;
+        }
 
-    // // HTTP file server
-    // nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", "build/http", "app.c");
-    // if (!nob_cmd_run_sync(cmd)) return 1;
+        char *input_path = nob_temp_sprintf("./examples/%s.c", example);
+        char *output_path = nob_temp_sprintf("./build/%s", example);
 
-    
+        Nob_Cmd cmd = {0};
+        nob_cmd_append(&cmd, "cc", "-Wall", "-Wextra", "-o", output_path, input_path);
+        if (!nob_cmd_run_sync_and_reset(&cmd)) return 1;
+
+        nob_cmd_append(&cmd, output_path);
+        return nob_cmd_run_sync(cmd);
+    }
+
     return 0;
+}
+
+int create_app_h_file(void)
+{
+    Nob_Fd output_fd = nob_fd_open_for_write("./app.h");
+    if (output_fd == NOB_INVALID_FD) {
+        return 1;
+    }
+
+    Nob_File_Paths files = {0};
+    if (!nob_read_entire_dir("./source", &files)) {
+        return 1;
+    }
+
+    qsort(files.items, files.count, sizeof(char*), alphabetical_cmp);
+
+    Nob_String_Builder sb = {0};
+    for (size_t i = 0; i < files.count; ++i) {
+        if (nob_sv_end_with(nob_sv_from_cstr(files.items[i]), ".h")) {
+            Nob_String_Builder file_content = {0};
+            char *file_path = nob_temp_sprintf("./source/%s", files.items[i]);
+            
+            if (!nob_read_entire_file(file_path, &file_content)) return 1;
+            nob_sb_append_buf(&sb, file_content.items, file_content.count);
+            nob_sb_append_cstr(&sb, "\n");
+            nob_sb_free(file_content);
+        }
+    }
+    
+    if (!nob_write_entire_file("./app.h", sb.items, sb.count)) return 1;
+
+    nob_fd_close(output_fd);
+    nob_da_free(sb);
+    nob_da_free(files);
+    return 0;
+}
+
+int alphabetical_cmp(const void *a, const void *b)
+{
+    return strcmp(*(char**)a, *(char**)b);
 }
