@@ -57,7 +57,7 @@ struct ListOfStr {
 // the last item in the list, while also decrementing the count
 #define list_remove(list, index) ({ \
     if ((index) >= (list)->count) { \
-        fprintf(stderr, "[ERROR] Index out of bounds\n"); \
+        perror("[ERROR] Index out of bounds\n"); \
         exit(1); \
     } \
     (list)->items[index] = (list)->items[--(list)->count]; \

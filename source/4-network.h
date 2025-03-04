@@ -12,9 +12,16 @@
 #define NETWORK_HEADER
 
 
+// Start listening on given port for incoming TCP connections
 void tcp_listen(int port, void (*handler)(int fd));
+
+// Read data from TCP socket to buffer until size is reached
 int tcp_read(int fd, char *buf, int size);
-int tcp_read_until(int fd, char *buf, int size, char *end);
+
+// Read data from TCP socket to buffer until delim is reached
+int tcp_read_until(int fd, char *buf, int size, char *delim);
+
+// Write data to TCP socket from buffer until size is reached
 int tcp_write(int fd, char *buf, int size);
 
 
@@ -46,12 +53,12 @@ void tcp_listen(int port, void (*handler)(int fd))
     };
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "Failed to bind to socket %d", port);
+        runtime_logf("Failed to bind to socket %d", port);
         goto exit;
     }
 
     if (listen(fd, 128) < 0) {
-        fprintf(stderr, "Failed to listen on socket");
+        runtime_logf("Failed to listen on socket");
         goto exit;
     }
 
@@ -67,7 +74,7 @@ void tcp_listen(int port, void (*handler)(int fd))
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
                 continue; 
             }
-            fprintf(stderr, "accept failed");
+            runtime_logf("accept failed");
             continue;
         }
 
@@ -89,9 +96,10 @@ int tcp_read(int fd, char *buf, int size)
 }
 
 
-int tcp_read_until(int fd, char *buf, int size, char *end)
+int tcp_read_until(int fd, char *buf, int size, char *delim)
 {
     int total_read = 0;
+
     while (total_read < size - 1) {
         int n = read(fd, buf + total_read, size - 1 - total_read);
         if (n < 0) {
@@ -99,17 +107,19 @@ int tcp_read_until(int fd, char *buf, int size, char *end)
                 runtime_read(fd);
                 continue;
             }
-            fprintf(stderr, "tcp_read failed");
+
+            runtime_logf("tcp_read failed");
             return -1;
-        } else if (n == 0) {
-            return -1; 
-        }
+
+        } else if (n == 0) return -1; 
+
         total_read += n;
 
-        if (strstr(buf, end)) {
+        if (strstr(buf, delim)) {
             break;
         }
     }
+
     buf[total_read] = '\0';
     return total_read;
 }
@@ -118,6 +128,7 @@ int tcp_read_until(int fd, char *buf, int size, char *end)
 int tcp_write(int fd, char *buf, int size)
 {
     int total_written = 0;
+
     while (total_written < size) {
         int n = write(fd, buf + total_written, size - total_written);
         if (n < 0) {
@@ -125,11 +136,14 @@ int tcp_write(int fd, char *buf, int size)
                 runtime_write(fd);
                 continue;
             }
-            fprintf(stderr, "tcp_write failed");
+
+            runtime_logf("tcp_write failed");
             return -1;
         }
+
         total_written += n;
     }
+
     return total_written;
 }
 

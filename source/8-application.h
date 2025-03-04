@@ -54,23 +54,23 @@ static struct ApplicationContext *default_context = {0};
 
 
 void app_handle(char *method, char *path, void (*handler)(struct NetworkRequest *req))
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_set(char *key, struct DataValue value)
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_func(char *key, struct DataValue (*func)(struct NetworkRequest *req))
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_serve_file(char *path, char *file)
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_serve_dir(char *dir, bool render)
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void _app_default_handler(int fd)

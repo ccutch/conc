@@ -1,7 +1,7 @@
 #define APP_IMPLEMENTATION
 #include "app.h"
 
-// static void app_render(Response*res, const char *template, void *data)
+// static void app_render(Response*res, char *template, void *data)
 // {
     // char *html = html_render(template, data);
     // http_write_header(res, 200);

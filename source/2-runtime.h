@@ -106,8 +106,11 @@ void runtime_finish(void);
 // Allocate memory in the current process that will be freed later
 void *runtime_alloc(int size);
 
-// Print with a string allocated to current runtime memory region
-char *runtime_sprint(const char *, ...);
+// Return with a string allocated to current runtime memory region
+char *runtime_sprint(char *, ...);
+
+// Print a string to stderr using runtime allocation
+void runtime_logf(char *, ...);
 
 
 #ifdef __GNUC__
@@ -122,7 +125,7 @@ char *runtime_sprint(const char *, ...);
 
 // This feature is only available for gcc due to the anonymous fn
 #define runtime_run(fn) ({ \
-    fprintf(stderr, "[ERROR] runtime_run is only available for gcc\n"); \
+    perror("[ERROR] runtime_run is only available for gcc\n"); \
     exit(1); \
 })
 
@@ -354,7 +357,7 @@ void runtime_continue(void)
         int timeout = runtime_running_procs.count > 1 ? 0 : -1;
         int result = poll(runtime_polls.items, runtime_polls.count, timeout);
         if (result < 0) {
-            fprintf(stderr, "[ERROR] poll failed\n");
+            runtime_logf("[ERROR] poll failed\n");
             exit(1);
         }
 
@@ -381,7 +384,7 @@ void runtime_finish(void)
 {
     int running_id = runtime_running_procs.items[runtime_current_proc];
     if (running_id == 0) {
-        fprintf(stderr, "[ERROR] Main coroutine with id 0 should never finish\n");
+        runtime_logf("[ERROR] Main coroutine with id 0 should never finish\n");
         exit(1);
     }
 
@@ -402,7 +405,7 @@ void runtime_finish(void)
         int timeout = runtime_running_procs.count > 1 ? 0 : -1;
         int result = poll(runtime_polls.items, runtime_polls.count, timeout);
         if (result < 0) {
-            fprintf(stderr, "[ERROR] poll failed\n");
+            runtime_logf("[ERROR] poll failed\n");
             exit(1);
         }
 
@@ -440,7 +443,7 @@ void *runtime_alloc(int size)
         int region_size = MEMORY_REGION_SIZE > size ? MEMORY_REGION_SIZE : size;
         running_proc->memory = memory_new_region(region_size);
         if (running_proc->memory == NULL) {
-            fprintf(stderr, "[ERROR] Failed to allocate memory for runtime process\n");
+            runtime_logf("[ERROR] Failed to allocate memory for runtime process\n");
             exit(1);
         }
     }
@@ -448,7 +451,7 @@ void *runtime_alloc(int size)
     return memory_alloc(running_proc->memory, size);
 }
 
-char *runtime_sprint(const char *fmt, ...)
+char *runtime_sprint(char *fmt, ...)
 {
     va_list args;
 
@@ -467,6 +470,14 @@ char *runtime_sprint(const char *fmt, ...)
     va_end(args);
 
     return string;
+}
+
+void runtime_logf(char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+        perror(runtime_sprint(fmt, args));
+    va_end(args);
 }
 
 

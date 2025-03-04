@@ -117,7 +117,7 @@ struct ListOfStr {
 // the last item in the list, while also decrementing the count
 #define list_remove(list, index) ({ \
     if ((index) >= (list)->count) { \
-        fprintf(stderr, "[ERROR] Index out of bounds\n"); \
+        perror("[ERROR] Index out of bounds\n"); \
         exit(1); \
     } \
     (list)->items[index] = (list)->items[--(list)->count]; \
@@ -261,6 +261,7 @@ void memory_destroy(MemoryRegion *region)
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <fcntl.h>
 
 
 #define RUNTIME_LIST_SIZE 512 
@@ -307,6 +308,7 @@ struct RuntimePolls {
 // Apply non-blocking mode to a file descriptor
 int runtime_unblock_fd(int);
 
+
 // Main function that will infinitely yield to any active process
 int runtime_main(void);
 
@@ -346,6 +348,12 @@ void runtime_finish(void);
 // Allocate memory in the current process that will be freed later
 void *runtime_alloc(int size);
 
+// Return with a string allocated to current runtime memory region
+char *runtime_sprint(char *, ...);
+
+// Print a string to stderr using runtime allocation
+void runtime_logf(char *, ...);
+
 
 #ifdef __GNUC__
 
@@ -359,12 +367,11 @@ void *runtime_alloc(int size);
 
 // This feature is only available for gcc due to the anonymous fn
 #define runtime_run(fn) ({ \
-    fprintf(stderr, "[ERROR] runtime_run is only available for gcc\n"); \
+    perror("[ERROR] runtime_run is only available for gcc\n"); \
     exit(1); \
 })
 
 #endif
-
 
 
 #ifdef RUNTIME_IMPLEMENTATION
@@ -411,43 +418,48 @@ int runtime_id(void)
     return runtime_running_procs.items[runtime_current_proc];
 }
 
-
-void runtime_start(void (*fn)(void*), void *arg)
-{
-    // Obtaining an id for the new process in global state
+void runtime_start(void (*fn)(void*), void *arg) {
     int id;
 
-    // First checking if there are any stopped processed we
-    // can take the id of, and if not we will create a new
-    // process, with globally allocated memory for the stack
-    if (runtime_stopped_procs.count > 0)
-      id = runtime_stopped_procs.items[--runtime_stopped_procs.count];
-    else {
+    if (runtime_stopped_procs.count > 0) {
+        // Reuse an stopped process ID if one is available
+        id = runtime_stopped_procs.items[--runtime_stopped_procs.count];
+    } else {
+        // Create a new process and allocate memory region
         list_append(&runtime_all_procs, ((struct RuntimeProc){0}));
         id = runtime_all_procs.count - 1;
         runtime_all_procs.items[id].memory = memory_new_region(MEMORY_REGION_SIZE);
-        runtime_all_procs.items[id].registers = mmap(NULL, RUNTIME_PROC_SIZE, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE|MAP_STACK|MAP_GROWSDOWN, -1, 0);
-        if (runtime_all_procs.items[id].registers == MAP_FAILED) {
-            fprintf(stderr, "[ERROR] Failed to allocate memory for process stack\n");
+
+        // Allocate stack with a guard page
+        void *stack = mmap(NULL, RUNTIME_PROC_SIZE + getpagesize(), PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (stack == MAP_FAILED) {
+            perror("[ERROR] Failed to allocate coroutine stack");
             exit(1);
         }
+
+        // Enable read/write permissions for the stack, leaving the first page protected
+        mprotect(stack + getpagesize(), RUNTIME_PROC_SIZE, PROT_READ | PROT_WRITE);
+        runtime_all_procs.items[id].registers = stack + getpagesize() + RUNTIME_PROC_SIZE;
     }
 
-    // Setting up end of the stack to return to cleanup 
-    // when the process finishes executing.
-    void **pointer = (void**)((char*)runtime_all_procs.items[id].registers + RUNTIME_PROC_SIZE - sizeof(void*));
-    *(--pointer) = runtime_finish; // return pointer
-    *(--pointer) = fn;             // function pointer
-    *(--pointer) = arg;            // %rdi (arg1)
-    *(--pointer) = 0;              // %rbp
-    *(--pointer) = 0;              // %rbx
-    *(--pointer) = 0;              // %r12
-    *(--pointer) = 0;              // %r13
-    *(--pointer) = 0;              // %r14
-    *(--pointer) = 0;              // %r15
+    // Ensure stack pointer is within valid range
+    void **pointer = (void**)(runtime_all_procs.items[id].registers - sizeof(void*));
+
+    // Setting up the coroutine stack
+    *(--pointer) = runtime_finish;  // Return pointer
+    *(--pointer) = fn;              // Function to execute
+    *(--pointer) = arg;             // First argument (in %rdi)
+    *(--pointer) = NULL;            // %rbp (Base pointer)
+    *(--pointer) = NULL;            // %rbx
+    *(--pointer) = NULL;            // %r12
+    *(--pointer) = NULL;            // %r13
+    *(--pointer) = NULL;            // %r14
+    *(--pointer) = NULL;            // %r15
+
+    // Set the stack pointer for the process
     runtime_all_procs.items[id].stack_pointer = pointer;
 
-    // Appending to the list of running processes
+    // Append to list of running processes
     list_append(&runtime_running_procs, id);
 }
 
@@ -587,7 +599,7 @@ void runtime_continue(void)
         int timeout = runtime_running_procs.count > 1 ? 0 : -1;
         int result = poll(runtime_polls.items, runtime_polls.count, timeout);
         if (result < 0) {
-            fprintf(stderr, "[ERROR] poll failed\n");
+            runtime_logf("[ERROR] poll failed\n");
             exit(1);
         }
 
@@ -614,7 +626,7 @@ void runtime_finish(void)
 {
     int running_id = runtime_running_procs.items[runtime_current_proc];
     if (running_id == 0) {
-        fprintf(stderr, "[ERROR] Main coroutine with id 0 should never finish\n");
+        runtime_logf("[ERROR] Main coroutine with id 0 should never finish\n");
         exit(1);
     }
 
@@ -635,7 +647,7 @@ void runtime_finish(void)
         int timeout = runtime_running_procs.count > 1 ? 0 : -1;
         int result = poll(runtime_polls.items, runtime_polls.count, timeout);
         if (result < 0) {
-            fprintf(stderr, "[ERROR] poll failed\n");
+            runtime_logf("[ERROR] poll failed\n");
             exit(1);
         }
 
@@ -673,12 +685,41 @@ void *runtime_alloc(int size)
         int region_size = MEMORY_REGION_SIZE > size ? MEMORY_REGION_SIZE : size;
         running_proc->memory = memory_new_region(region_size);
         if (running_proc->memory == NULL) {
-            fprintf(stderr, "[ERROR] Failed to allocate memory for runtime process\n");
+            runtime_logf("[ERROR] Failed to allocate memory for runtime process\n");
             exit(1);
         }
     }
 
     return memory_alloc(running_proc->memory, size);
+}
+
+char *runtime_sprint(char *fmt, ...)
+{
+    va_list args;
+
+    // Count the size of the string to allocate memory
+    va_start(args, fmt);
+        int count = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+
+    // Allocating memory in our current process region
+    char *string = runtime_alloc(count + 1);
+    if (string == NULL) return NULL;
+
+    // Performing actual print opperation to the string
+    va_start(args, fmt);
+        vsnprintf(string, count + 1, fmt, args);
+    va_end(args);
+
+    return string;
+}
+
+void runtime_logf(char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+        perror(runtime_sprint(fmt, args));
+    va_end(args);
 }
 
 
@@ -695,48 +736,6 @@ void *runtime_alloc(int size)
 */
 
 
-// from another module runtime.h
-
-// Main function that will infinitely yield to any active process
-extern int runtime_main(void);
-
-
-// Return the id of the currently running runtime process
-extern int runtime_id(void);
-
-
-// Start a new process, this process can pass a single argument
-extern void runtime_start(void (*main)(void*), void *arg);
-
-
-// Yield the CPU to the next process waiting to use the resources
-extern void runtime_yield(void);
-
-
-// Suspend the current proccess until the fd is ready for reading
-extern void runtime_read(int fd);
-
-
-// Suspend the current proccess until the fd is ready for writing
-extern void runtime_write(int fd);
-
-
-// Continue onto the next process after yielding the resources
-extern void runtime_continue(void);
-
-
-// Resume execution of the coroutine by moving the pointer to %rsp
-extern void runtime_resume(void* ptr);
-
-
-// Finish the current process and resume the next active process
-extern void runtime_finish(void);
-
-// Allocate memory in the current process that will be freed later
-extern void *runtime_alloc(int size);
-
-
-
 #ifndef SYSTEM_HEADER
 #define SYSTEM_HEADER
 
@@ -746,6 +745,7 @@ typedef struct SystemProc {
     int err_fd;
     int pid;
 } SystemProc;
+
 
 // Run a new child process and return the file descriptor
 SystemProc * system_run(char * cmd);
@@ -765,6 +765,18 @@ int system_stderr(SystemProc * proc, char * buf, int count);
 // Get environment variable by name, or return default value
 char * system_getenv(char * name, char * def_value);
 
+// Check the existence of a file
+int system_file_exists(char * path);
+
+// Remove a file if it exists
+int system_remove(char * path);
+
+// Create a directory if it does not already exist
+int system_mkdir(char * path);
+
+// Remove a directory if it exists
+int system_rmdir(char * path);
+
 // Read from a file descriptor, file or child process
 int system_read_file(char * path, char * buf, int count);
 
@@ -780,24 +792,27 @@ int system_write_file(char * path, char * buf, int count);
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 
 SystemProc * system_run(char * cmd) {
     int out_fd[2];
     if (pipe(out_fd) < 0) {
-        fprintf(stderr, "failed to create pipe");
+        perror("failed to create pipe");
         return NULL;
     }
 
     int err_fd[2];
     if (pipe(err_fd) < 0) {
-        fprintf(stderr, "failed to create pipe");
+        perror("failed to create pipe");
         return NULL;
     }
 
     int pid = fork();
     if (pid == -1) {
-        fprintf(stderr, "failed to create pipe");
+        perror("failed to create pipe");
         close(out_fd[0]);
         close(err_fd[0]);
         close(out_fd[1]);
@@ -817,7 +832,7 @@ SystemProc * system_run(char * cmd) {
         close(err_fd[1]);
 
         execl("/bin/sh", "sh", "-c", cmd, NULL);
-        fprintf("failed to execute shell command: %s\n", cmd);
+        runtime_logf("failed to execute shell command: %s\n", cmd);
         exit(EXIT_FAILURE);
     }
 
@@ -844,8 +859,8 @@ int system_join(SystemProc * proc) {
         return -1;
     }
 
-    if (proc->stdout_fd >= 0) close(proc->stdout_fd);
-    if (proc->stderr_fd >= 0) close(proc->stderr_fd);
+    if (proc->out_fd >= 0) close(proc->out_fd);
+    if (proc->err_fd >= 0) close(proc->err_fd);
 
     free(proc);
     if (WIFEXITED(status)) {
@@ -869,24 +884,24 @@ int system_stdout(SystemProc * proc, char * buf, int count)
 {
     int total_read = 0;
     while (total_read < count - 1) {
-        int n = read(proc->stdout_fd, buf + total_read, count - 1 - total_read);
+        int n = read(proc->out_fd, buf + total_read, count - 1 - total_read);
         if (n < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_read(proc->stdout_fd);
+                runtime_read(proc->out_fd);
                 continue;
             }
 
-            fprintf(stderr, "failed to read stdout of process %d\n", proc->pid);
-            close(proc->stdout_fd);
-            proc->stdout_fd = -1;
+            runtime_logf("failed to read stdout of process %d\n", proc->pid);
+            close(proc->out_fd);
+            proc->out_fd = -1;
             return -1;
         } else if (n == 0) break;
 
         total_read += n;
     }
 
-    close(proc->stdout_fd);
-    proc->stdout_fd = -1;
+    close(proc->out_fd);
+    proc->out_fd = -1;
     return total_read;
 }
 
@@ -895,24 +910,24 @@ int system_stderr(SystemProc * proc, char * buf, int count)
 {
     int total_read = 0;
     while (total_read < count - 1) {
-        int n = read(proc->stderr_fd, buf + total_read, count - 1 - total_read);
+        int n = read(proc->err_fd, buf + total_read, count - 1 - total_read);
         if (n < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_read(proc->stderr_fd);
+                runtime_read(proc->err_fd);
                 continue;
             }
 
-            fprintf(stderr, "failed to read stderr of process %d\n", proc->pid);
-            close(proc->stderr_fd);
-            proc->stderr_fd = -1;
+            runtime_logf("failed to read stderr of process %d\n", proc->pid);
+            close(proc->err_fd);
+            proc->err_fd = -1;
             return -1;
         } else if (n == 0) break;
 
         total_read += n;
     }
 
-    close(proc->stderr_fd);
-    proc->stderr_fd = -1;
+    close(proc->err_fd);
+    proc->err_fd = -1;
     return total_read;
 }
 
@@ -923,11 +938,41 @@ char * system_getenv(char * name, char * def_value)
     return value ? value : def_value;
 }
 
+
+int system_file_exists(char * path)
+{
+    struct stat statbuf;
+    if (stat(path, &statbuf) < 0) {
+        if (errno == ENOENT) return 0;
+        return -1;
+    }
+    return 1;
+}
+
+
+int system_remove(char * path)
+{
+    return remove(path) < 0;
+}
+
+
+int system_mkdir(char * path)
+{
+    return mkdir(path, 0755) < 0;
+}
+
+
+int system_rmdir(char * path)
+{
+    return rmdir(path) < 0;
+}
+
+
 int system_read_file(char * path, char * buf, int count)
 {
     int fd = open(path, O_NONBLOCK | O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "failed to open file: %s\n", path);
+        runtime_logf("failed to open file: %s\n", path);
         return -1;
     }
 
@@ -940,7 +985,7 @@ int system_read_file(char * path, char * buf, int count)
                 continue;
             }
 
-            fprintf(stderr, "failed to read file %s", path);
+            runtime_logf("failed to read file %s", path);
             close(fd);
             return -1;
         } else if (n == 0) break;
@@ -949,15 +994,15 @@ int system_read_file(char * path, char * buf, int count)
     }
 
     close(fd);
-    return 0;
+    return total_read;
 }
 
 
 int system_write_file(char * path, char *buf, int count)
 {
-    int fd = open(path, O_NONBLOCK | O_WRONLY);
+    int fd = open(path, O_NONBLOCK | O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
-        fprintf(stderr, "failed to open file: %s\n", path);
+        runtime_logf("failed to open file: %s\n", path);
         return -1;
     }
 
@@ -970,7 +1015,7 @@ int system_write_file(char * path, char *buf, int count)
                 continue;
             }
 
-            fprintf(stderr, "failed to write file %s", path);
+            runtime_logf("failed to write file %s", path);
             close(fd);
             return -1;
         }
@@ -985,6 +1030,7 @@ int system_write_file(char * path, char *buf, int count)
 
 #endif // SYSTEM_IMPLEMENTATION
 #endif // SYSTEM_HEADER
+
 /** network.h - Provides non-blocking tcp server, a basic HTTP interface, and
                 a path based router for handling incoming requests.
 
@@ -999,9 +1045,16 @@ int system_write_file(char * path, char *buf, int count)
 #define NETWORK_HEADER
 
 
+// Start listening on given port for incoming TCP connections
 void tcp_listen(int port, void (*handler)(int fd));
+
+// Read data from TCP socket to buffer until size is reached
 int tcp_read(int fd, char *buf, int size);
-int tcp_read_until(int fd, char *buf, int size, char *end);
+
+// Read data from TCP socket to buffer until delim is reached
+int tcp_read_until(int fd, char *buf, int size, char *delim);
+
+// Write data to TCP socket from buffer until size is reached
 int tcp_write(int fd, char *buf, int size);
 
 
@@ -1033,12 +1086,12 @@ void tcp_listen(int port, void (*handler)(int fd))
     };
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("Failed to bind to socket");
+        runtime_logf("Failed to bind to socket %d", port);
         goto exit;
     }
 
     if (listen(fd, 128) < 0) {
-        perror("Failed to listen on socket");
+        runtime_logf("Failed to listen on socket");
         goto exit;
     }
 
@@ -1054,7 +1107,7 @@ void tcp_listen(int port, void (*handler)(int fd))
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
                 continue; 
             }
-            perror("accept failed");
+            runtime_logf("accept failed");
             continue;
         }
 
@@ -1076,9 +1129,10 @@ int tcp_read(int fd, char *buf, int size)
 }
 
 
-int tcp_read_until(int fd, char *buf, int size, char *end)
+int tcp_read_until(int fd, char *buf, int size, char *delim)
 {
     int total_read = 0;
+
     while (total_read < size - 1) {
         int n = read(fd, buf + total_read, size - 1 - total_read);
         if (n < 0) {
@@ -1086,17 +1140,19 @@ int tcp_read_until(int fd, char *buf, int size, char *end)
                 runtime_read(fd);
                 continue;
             }
-            perror("tcp_read failed");
+
+            runtime_logf("tcp_read failed");
             return -1;
-        } else if (n == 0) {
-            return -1; 
-        }
+
+        } else if (n == 0) return -1; 
+
         total_read += n;
 
-        if (strstr(buf, end)) {
+        if (strstr(buf, delim)) {
             break;
         }
     }
+
     buf[total_read] = '\0';
     return total_read;
 }
@@ -1105,6 +1161,7 @@ int tcp_read_until(int fd, char *buf, int size, char *end)
 int tcp_write(int fd, char *buf, int size)
 {
     int total_written = 0;
+
     while (total_written < size) {
         int n = write(fd, buf + total_written, size - total_written);
         if (n < 0) {
@@ -1112,17 +1169,21 @@ int tcp_write(int fd, char *buf, int size)
                 runtime_write(fd);
                 continue;
             }
-            perror("tcp_write failed");
+
+            runtime_logf("tcp_write failed");
             return -1;
         }
+
         total_written += n;
     }
+
     return total_written;
 }
 
 
 #endif // NETWORK_IMPLEMENTATION
 #endif // NETWORK_HEADER
+
 /** data.h - Provides a shallow layer of abstraction on top of json like 
              data structures to allow for reflection and serialization.
 
@@ -1148,6 +1209,7 @@ int tcp_write(int fd, char *buf, int size)
 
 #endif // DATA_IMPLEMENTATION
 #endif // DATA_HEADER
+
 /** database.h - Provides a wrapper around the sqlite3 library to store data in
                  a unstructured way with documents-based storage.
 
@@ -1173,6 +1235,7 @@ int tcp_write(int fd, char *buf, int size)
 
 #endif // DATABASE_IMPLEMENTATION
 #endif // DATABASE_HEADER
+
 /** template.h - Provides a templating engine that will allow us to generate
                   HTML from our data structures, inspired by Go.
 
@@ -1198,6 +1261,7 @@ int tcp_write(int fd, char *buf, int size)
 
 #endif // TEMPLATE_IMPLEMENTATION
 #endif // TEMPLATE_HEADER
+
 /** application.h - Provides a high level interface for starting our application,
                     binding data, serving files and folders.
 
@@ -1254,23 +1318,23 @@ static struct ApplicationContext *default_context = {0};
 
 
 void app_handle(char *method, char *path, void (*handler)(struct NetworkRequest *req))
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_set(char *key, struct DataValue value)
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_func(char *key, struct DataValue (*func)(struct NetworkRequest *req))
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_serve_file(char *path, char *file)
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void app_serve_dir(char *dir, bool render)
-{ fprintf(stderr, "not implemented"); }
+{ runtime_logf("not implemented"); }
 
 
 void _app_default_handler(int fd)
@@ -1294,3 +1358,4 @@ int app_start(int port)
 
 #endif // APPLICATION_IMPLEMENTATION
 #endif // APPLICATION_HEADER
+

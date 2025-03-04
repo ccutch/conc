@@ -6,8 +6,6 @@
     @license: MIT
 */
 
-#include <stdio.h>
-#include <string.h>
 
 #define MEMORY_IMPLEMENTATION
 #include "../source/1-memory.h"
@@ -49,6 +47,7 @@ void run_command()
     printf("Process exited with code: %d\n", exit_code);
 }
 
+
 void get_environment_path()
 {
     // Retrieve an environment variable
@@ -56,28 +55,30 @@ void get_environment_path()
     printf("PATH environment variable: %s\n", path);
 }
 
+
 void write_and_read_a_file()
 {
+    // Remove file if it exists, we are ignoring errors
+    char *file_path = "build/testfile.txt";
+    system_remove(file_path);
+
+    // Write content to the file that we just cleared
     char *message = "This is a test message.\n";
     int n;
-    if ((n = system_write_file("testfile.txt", message, 24)) > 0) {
+    if ((n = system_write_file(file_path, message, 24)) > 0) {
         printf("File written successfully %d.\n", n);
     } else {
         printf("Failed to write file.\n");
     }
-    printf("moving");
 
+    // Read content from the file we just wrote to
     char file_buf[256] = {0};
-    if ((n = system_read_file("testfile.txt", file_buf, sizeof(file_buf))) > 0) {
+    if ((n = system_read_file(file_path, file_buf, sizeof(file_buf))) > 0) {
+        printf("File size: %d\n", n);
         printf("File contents: %s\n", file_buf);
     } else {
         printf("Failed to read file. %d\n", n);
     }
-
-    // if (system_remove("testfile.txt") < 0) {
-    //     printf("Failed to remove file.\n");
-    //     return;
-    // }
 }
 
 

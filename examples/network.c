@@ -6,14 +6,15 @@
     @license: MIT
 */
 
-#include <stdio.h>
-#include <string.h>
 
 #define MEMORY_IMPLEMENTATION
 #include "../source/1-memory.h"
 
 #define RUNTIME_IMPLEMENTATION 
 #include "../source/2-runtime.h"
+
+#define SYSTEM_IMPLEMENTATION
+#include "../source/3-system.h"
 
 #define NETWORK_IMPLEMENTATION
 #include "../source/4-network.h"
@@ -42,10 +43,18 @@ void handler(int fd)
 
         trim_whitespace(buf);
         if (strcmp(buf, "quit") == 0) break;
+        if (strcmp(buf, "read") == 0) {
+            char file_buf[256] = {0};
+            if ((n = system_read_file("testfile.txt", file_buf, 256)) > 0) {
+                tcp_write(fd, file_buf, n);
+                continue;
+            }
+        }
 
         strcat(buf, "\n");
         tcp_write(fd, buf, strlen(buf));
     }
+
     close(fd);
     exit(EXIT_SUCCESS);
 }
@@ -53,8 +62,6 @@ void handler(int fd)
 
 int main(void)
 {
-
     runtime_run(tcp_listen(9090, handler));
-
     return runtime_main();
 }
