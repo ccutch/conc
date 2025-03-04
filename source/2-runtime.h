@@ -1,10 +1,14 @@
+/** runtime.h - Provides a cooperative runtime for our application.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT  
+*/
+
+
 #ifndef RUNTIME_HEADER
 #define RUNTIME_HEADER
-
-
-/////////////
-// RUNTIME //
-/////////////
 
 
 #include <poll.h>
@@ -15,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <fcntl.h>
 
 
 #define RUNTIME_LIST_SIZE 512 
@@ -58,6 +63,10 @@ struct RuntimePolls {
 };
 
 
+// Apply non-blocking mode to a file descriptor
+int runtime_unblock_fd(int);
+
+
 // Main function that will infinitely yield to any active process
 int runtime_main(void);
 
@@ -97,6 +106,9 @@ void runtime_finish(void);
 // Allocate memory in the current process that will be freed later
 void *runtime_alloc(int size);
 
+// Print with a string allocated to current runtime memory region
+char *runtime_sprint(const char *, ...);
+
 
 #ifdef __GNUC__
 
@@ -115,7 +127,6 @@ void *runtime_alloc(int size);
 })
 
 #endif
-
 
 
 #ifdef RUNTIME_IMPLEMENTATION
@@ -140,6 +151,12 @@ static struct ListOfInt runtime_waiting_procs = {0};
 static struct ListOfInt runtime_stopped_procs = {0};
 
 
+int runtime_unblock_fd(int fd)
+{
+    return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+}
+
+
 int runtime_main(void)
 {
     // I are checking both the running and waiting processes
@@ -156,43 +173,48 @@ int runtime_id(void)
     return runtime_running_procs.items[runtime_current_proc];
 }
 
-
-void runtime_start(void (*fn)(void*), void *arg)
-{
-    // Obtaining an id for the new process in global state
+void runtime_start(void (*fn)(void*), void *arg) {
     int id;
 
-    // First checking if there are any stopped processed we
-    // can take the id of, and if not we will create a new
-    // process, with globally allocated memory for the stack
-    if (runtime_stopped_procs.count > 0)
-      id = runtime_stopped_procs.items[--runtime_stopped_procs.count];
-    else {
+    if (runtime_stopped_procs.count > 0) {
+        // Reuse an stopped process ID if one is available
+        id = runtime_stopped_procs.items[--runtime_stopped_procs.count];
+    } else {
+        // Create a new process and allocate memory region
         list_append(&runtime_all_procs, ((struct RuntimeProc){0}));
         id = runtime_all_procs.count - 1;
         runtime_all_procs.items[id].memory = memory_new_region(MEMORY_REGION_SIZE);
-        runtime_all_procs.items[id].registers = mmap(NULL, RUNTIME_PROC_SIZE, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE|MAP_STACK|MAP_GROWSDOWN, -1, 0);
-        if (runtime_all_procs.items[id].registers == MAP_FAILED) {
-            fprintf(stderr, "[ERROR] Failed to allocate memory for process stack\n");
+
+        // Allocate stack with a guard page
+        void *stack = mmap(NULL, RUNTIME_PROC_SIZE + getpagesize(), PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (stack == MAP_FAILED) {
+            perror("[ERROR] Failed to allocate coroutine stack");
             exit(1);
         }
+
+        // Enable read/write permissions for the stack, leaving the first page protected
+        mprotect(stack + getpagesize(), RUNTIME_PROC_SIZE, PROT_READ | PROT_WRITE);
+        runtime_all_procs.items[id].registers = stack + getpagesize() + RUNTIME_PROC_SIZE;
     }
 
-    // Setting up end of the stack to return to cleanup 
-    // when the process finishes executing.
-    void **pointer = (void**)((char*)runtime_all_procs.items[id].registers + RUNTIME_PROC_SIZE - sizeof(void*));
-    *(--pointer) = runtime_finish; // return pointer
-    *(--pointer) = fn;             // function pointer
-    *(--pointer) = arg;            // %rdi (arg1)
-    *(--pointer) = 0;              // %rbp
-    *(--pointer) = 0;              // %rbx
-    *(--pointer) = 0;              // %r12
-    *(--pointer) = 0;              // %r13
-    *(--pointer) = 0;              // %r14
-    *(--pointer) = 0;              // %r15
+    // Ensure stack pointer is within valid range
+    void **pointer = (void**)(runtime_all_procs.items[id].registers - sizeof(void*));
+
+    // Setting up the coroutine stack
+    *(--pointer) = runtime_finish;  // Return pointer
+    *(--pointer) = fn;              // Function to execute
+    *(--pointer) = arg;             // First argument (in %rdi)
+    *(--pointer) = NULL;            // %rbp (Base pointer)
+    *(--pointer) = NULL;            // %rbx
+    *(--pointer) = NULL;            // %r12
+    *(--pointer) = NULL;            // %r13
+    *(--pointer) = NULL;            // %r14
+    *(--pointer) = NULL;            // %r15
+
+    // Set the stack pointer for the process
     runtime_all_procs.items[id].stack_pointer = pointer;
 
-    // Appending to the list of running processes
+    // Append to list of running processes
     list_append(&runtime_running_procs, id);
 }
 
@@ -424,6 +446,27 @@ void *runtime_alloc(int size)
     }
 
     return memory_alloc(running_proc->memory, size);
+}
+
+char *runtime_sprint(const char *fmt, ...)
+{
+    va_list args;
+
+    // Count the size of the string to allocate memory
+    va_start(args, fmt);
+        int count = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+
+    // Allocating memory in our current process region
+    char *string = runtime_alloc(count + 1);
+    if (string == NULL) return NULL;
+
+    // Performing actual print opperation to the string
+    va_start(args, fmt);
+        vsnprintf(string, count + 1, fmt, args);
+    va_end(args);
+
+    return string;
 }
 
 

@@ -1,13 +1,19 @@
+/** application.h - Provides a high level interface for starting our application,
+                    binding data, serving files and folders.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef APPLICATION_HEADER
 #define APPLICATION_HEADER
 
 
-/////////////////
-// APPLICATION //
-/////////////////
-
-
 #include <stdbool.h>
+
 
 #define APP_DEFAULT_PORT 8080
 #define APP_HANDLER _app_default_handler
@@ -81,7 +87,7 @@ void _app_default_handler(int fd)
 int app_start(int port)
 {
     if (port == 0) port = APP_DEFAULT_PORT;
-    runtime_start(network_listen(port, APP_HANDLER))
+    runtime_start(network_listen(port, APP_HANDLER));
     return runtime_main();
 }
 

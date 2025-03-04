@@ -1,3 +1,10 @@
+/** runtime.c - Example usage of the runtime module.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
 
 #define MEMORY_IMPLEMENTATION
 #include "../source/1-memory.h"
@@ -42,7 +49,7 @@ int main(void)
     runtime_start(counter, (void*)10);
     runtime_start(counter, (void*)20);
 
-    // Or you can run with the macro if you are using gcc
+    // Or you can run with the macro if you compile with GCC
     runtime_run(typed_counter(30));
 
     // Finally, block until all processes are finished

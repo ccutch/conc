@@ -58,22 +58,30 @@
     #define APPLICATION_IMPLEMENTATION
 #endif
 
+/** memory.h - Provides a region based memory system for storing data.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-01
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef MEMORY_HEADER
 #define MEMORY_HEADER
-
-
-////////////
-// MEMORY //
-////////////
 
 
 #include <stddef.h>
 #include <stdlib.h>
 
 
-// We need a dynamic way to store data about the current state of
-// our application and the processes that are running. Providing
-// a few common containers for storing data, using the name list.
+//  We need a dynamic way to store data about the current state of
+//  our application and our actively running processes . Providing
+//  a few common containers for storing data, using the name list.
+//
+//    .-----------------------------------------------------.
+//    | <data type> * data_start | int capacity | int count |
+//    '-----------------------------------------------------'
 
 
 // Generic list of integer values, primarily used for storing
@@ -232,13 +240,17 @@ void memory_destroy(MemoryRegion *region)
 #endif // MEMORY_IMPLEMENTATION
 #endif // MEMORY_HEADER
 
+/** runtime.h - Provides a cooperative runtime for our application.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT  
+*/
+
+
 #ifndef RUNTIME_HEADER
 #define RUNTIME_HEADER
-
-
-/////////////
-// RUNTIME //
-/////////////
 
 
 #include <poll.h>
@@ -291,6 +303,9 @@ struct RuntimePolls {
     int capacity;
 };
 
+
+// Apply non-blocking mode to a file descriptor
+int runtime_unblock_fd(int);
 
 // Main function that will infinitely yield to any active process
 int runtime_main(void);
@@ -372,6 +387,12 @@ static struct ListOfInt runtime_waiting_procs = {0};
 
 // Reference list of all processes that finished
 static struct ListOfInt runtime_stopped_procs = {0};
+
+
+int runtime_unblock_fd(int fd)
+{
+    return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+}
 
 
 int runtime_main(void)
@@ -664,53 +685,456 @@ void *runtime_alloc(int size)
 
 #endif // RUNTIME_IMPLEMENTATION
 #endif // RUNTIME_HEADER
+/** system.h - Provides low level integration with the os for system calls,
+               non-blocking file I/O, and environment variables.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
+// from another module runtime.h
+
+// Main function that will infinitely yield to any active process
+extern int runtime_main(void);
+
+
+// Return the id of the currently running runtime process
+extern int runtime_id(void);
+
+
+// Start a new process, this process can pass a single argument
+extern void runtime_start(void (*main)(void*), void *arg);
+
+
+// Yield the CPU to the next process waiting to use the resources
+extern void runtime_yield(void);
+
+
+// Suspend the current proccess until the fd is ready for reading
+extern void runtime_read(int fd);
+
+
+// Suspend the current proccess until the fd is ready for writing
+extern void runtime_write(int fd);
+
+
+// Continue onto the next process after yielding the resources
+extern void runtime_continue(void);
+
+
+// Resume execution of the coroutine by moving the pointer to %rsp
+extern void runtime_resume(void* ptr);
+
+
+// Finish the current process and resume the next active process
+extern void runtime_finish(void);
+
+// Allocate memory in the current process that will be freed later
+extern void *runtime_alloc(int size);
+
+
+
 #ifndef SYSTEM_HEADER
 #define SYSTEM_HEADER
 
 
-////////////
-// SYSTEM //
-////////////
+typedef struct SystemProc {
+    int out_fd;
+    int err_fd;
+    int pid;
+} SystemProc;
 
+// Run a new child process and return the file descriptor
+SystemProc * system_run(char * cmd);
 
-// TODO
+// Wait for a child process to finish and return the exit code
+int system_join(SystemProc * proc);
+
+// Kill a process by file descriptor, returning the exit code
+int system_kill(SystemProc * proc);
+
+// Read from stdout of a child process
+int system_stdout(SystemProc * proc, char * buf, int count);
+
+// Read from stderr of a child process
+int system_stderr(SystemProc * proc, char * buf, int count);
+
+// Get environment variable by name, or return default value
+char * system_getenv(char * name, char * def_value);
+
+// Read from a file descriptor, file or child process
+int system_read_file(char * path, char * buf, int count);
+
+// Write to a file descriptor, file or child process
+int system_write_file(char * path, char * buf, int count);
 
 
 #ifdef SYSTEM_IMPLEMENTATION
-    
 
-// TODO
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+
+
+SystemProc * system_run(char * cmd) {
+    int out_fd[2];
+    if (pipe(out_fd) < 0) {
+        fprintf(stderr, "failed to create pipe");
+        return NULL;
+    }
+
+    int err_fd[2];
+    if (pipe(err_fd) < 0) {
+        fprintf(stderr, "failed to create pipe");
+        return NULL;
+    }
+
+    int pid = fork();
+    if (pid == -1) {
+        fprintf(stderr, "failed to create pipe");
+        close(out_fd[0]);
+        close(err_fd[0]);
+        close(out_fd[1]);
+        close(err_fd[1]);
+        return NULL;
+    }
+
+    if (pid == 0) {
+        // Child process
+        close(out_fd[0]);
+        close(err_fd[0]);
+
+        dup2(out_fd[1], STDOUT_FILENO);
+        dup2(err_fd[1], STDERR_FILENO);
+
+        close(out_fd[1]);
+        close(err_fd[1]);
+
+        execl("/bin/sh", "sh", "-c", cmd, NULL);
+        fprintf("failed to execute shell command: %s\n", cmd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Parent process
+    close(out_fd[1]);
+    close(err_fd[1]);
+
+    runtime_unblock_fd(out_fd[0]);
+    runtime_unblock_fd(err_fd[0]);
+
+    SystemProc * proc = runtime_alloc(sizeof(SystemProc));
+    proc->out_fd = out_fd[0];
+    proc->err_fd = err_fd[0];
+    proc->pid = pid;
+    return proc;
+}
+
+
+int system_join(SystemProc * proc) {
+    int status;
+    if (waitpid(proc->pid, &status, 0) == -1) {
+        perror("waitpid failed");
+        free(proc);
+        return -1;
+    }
+
+    if (proc->stdout_fd >= 0) close(proc->stdout_fd);
+    if (proc->stderr_fd >= 0) close(proc->stderr_fd);
+
+    free(proc);
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    return -1;
+}
+
+
+int system_kill(SystemProc * proc) {
+    if (kill(proc->pid, SIGKILL) < 0) {
+        perror("kill failed");
+        return -1;
+    }
+    return system_join(proc);
+}
+
+
+int system_stdout(SystemProc * proc, char * buf, int count)
+{
+    int total_read = 0;
+    while (total_read < count - 1) {
+        int n = read(proc->stdout_fd, buf + total_read, count - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(proc->stdout_fd);
+                continue;
+            }
+
+            fprintf(stderr, "failed to read stdout of process %d\n", proc->pid);
+            close(proc->stdout_fd);
+            proc->stdout_fd = -1;
+            return -1;
+        } else if (n == 0) break;
+
+        total_read += n;
+    }
+
+    close(proc->stdout_fd);
+    proc->stdout_fd = -1;
+    return total_read;
+}
+
+
+int system_stderr(SystemProc * proc, char * buf, int count)
+{
+    int total_read = 0;
+    while (total_read < count - 1) {
+        int n = read(proc->stderr_fd, buf + total_read, count - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(proc->stderr_fd);
+                continue;
+            }
+
+            fprintf(stderr, "failed to read stderr of process %d\n", proc->pid);
+            close(proc->stderr_fd);
+            proc->stderr_fd = -1;
+            return -1;
+        } else if (n == 0) break;
+
+        total_read += n;
+    }
+
+    close(proc->stderr_fd);
+    proc->stderr_fd = -1;
+    return total_read;
+}
+
+
+char * system_getenv(char * name, char * def_value)
+{
+    char * value = getenv(name);
+    return value ? value : def_value;
+}
+
+int system_read_file(char * path, char * buf, int count)
+{
+    int fd = open(path, O_NONBLOCK | O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "failed to open file: %s\n", path);
+        return -1;
+    }
+
+    int total_read = 0;
+    while (total_read < count - 1) {
+        int n = read(fd, buf + total_read, count - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(fd);
+                continue;
+            }
+
+            fprintf(stderr, "failed to read file %s", path);
+            close(fd);
+            return -1;
+        } else if (n == 0) break;
+
+        total_read += n;
+    }
+
+    close(fd);
+    return 0;
+}
+
+
+int system_write_file(char * path, char *buf, int count)
+{
+    int fd = open(path, O_NONBLOCK | O_WRONLY);
+    if (fd < 0) {
+        fprintf(stderr, "failed to open file: %s\n", path);
+        return -1;
+    }
+
+    int total_written = 0;
+    while (total_written < count) {
+        int n = write(fd, buf + total_written, count - total_written);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_write(fd);
+                continue;
+            }
+
+            fprintf(stderr, "failed to write file %s", path);
+            close(fd);
+            return -1;
+        }
+
+        total_written += n;
+    }
+
+    close(fd);
+    return total_written;
+}
 
 
 #endif // SYSTEM_IMPLEMENTATION
 #endif // SYSTEM_HEADER
+/** network.h - Provides non-blocking tcp server, a basic HTTP interface, and
+                a path based router for handling incoming requests.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef NETWORK_HEADER
 #define NETWORK_HEADER
 
 
-///////////
-// NETWORK //
-///////////
-
-
-// TODO
+void tcp_listen(int port, void (*handler)(int fd));
+int tcp_read(int fd, char *buf, int size);
+int tcp_read_until(int fd, char *buf, int size, char *end);
+int tcp_write(int fd, char *buf, int size);
 
 
 #ifdef NETWORK_IMPLEMENTATION
     
 
-// TODO
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <fcntl.h>
+#include <assert.h>
+
+
+void tcp_listen(int port, void (*handler)(int fd))
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    assert(fd >= 0 && "Failed to create socket");
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = INADDR_ANY,
+        .sin_port = htons(port),
+    };
+
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("Failed to bind to socket");
+        goto exit;
+    }
+
+    if (listen(fd, 128) < 0) {
+        perror("Failed to listen on socket");
+        goto exit;
+    }
+
+    runtime_unblock_fd(fd);
+
+    while (true) {
+        runtime_read(fd);
+        printf("Waiting for connection");
+
+        socklen_t addr_len = sizeof(addr);
+        int conn_fd = accept(fd, (struct sockaddr *)&addr, &addr_len);
+        if (conn_fd < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                continue; 
+            }
+            perror("accept failed");
+            continue;
+        }
+
+        runtime_unblock_fd(conn_fd);
+        
+        runtime_start((void*)handler, (void*)(long int)conn_fd);
+        runtime_yield();
+    }
+
+exit:
+    close(fd);
+    return;
+}
+
+
+int tcp_read(int fd, char *buf, int size)
+{
+    return tcp_read_until(fd, buf, size, "\0");
+}
+
+
+int tcp_read_until(int fd, char *buf, int size, char *end)
+{
+    int total_read = 0;
+    while (total_read < size - 1) {
+        int n = read(fd, buf + total_read, size - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(fd);
+                continue;
+            }
+            perror("tcp_read failed");
+            return -1;
+        } else if (n == 0) {
+            return -1; 
+        }
+        total_read += n;
+
+        if (strstr(buf, end)) {
+            break;
+        }
+    }
+    buf[total_read] = '\0';
+    return total_read;
+}
+
+
+int tcp_write(int fd, char *buf, int size)
+{
+    int total_written = 0;
+    while (total_written < size) {
+        int n = write(fd, buf + total_written, size - total_written);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_write(fd);
+                continue;
+            }
+            perror("tcp_write failed");
+            return -1;
+        }
+        total_written += n;
+    }
+    return total_written;
+}
 
 
 #endif // NETWORK_IMPLEMENTATION
 #endif // NETWORK_HEADER
+/** data.h - Provides a shallow layer of abstraction on top of json like 
+             data structures to allow for reflection and serialization.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef DATA_HEADER
 #define DATA_HEADER
-
-
-//////////
-// DATA //
-//////////
 
 
 // TODO
@@ -724,13 +1148,18 @@ void *runtime_alloc(int size)
 
 #endif // DATA_IMPLEMENTATION
 #endif // DATA_HEADER
+/** database.h - Provides a wrapper around the sqlite3 library to store data in
+                 a unstructured way with documents-based storage.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef DATABASE_HEADER
 #define DATABASE_HEADER
-
-
-//////////////
-// DATABASE //
-//////////////
 
 
 // TODO
@@ -744,13 +1173,18 @@ void *runtime_alloc(int size)
 
 #endif // DATABASE_IMPLEMENTATION
 #endif // DATABASE_HEADER
+/** template.h - Provides a templating engine that will allow us to generate
+                  HTML from our data structures, inspired by Go.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef TEMPLATE_HEADER
 #define TEMPLATE_HEADER
-
-
-//////////////
-// TEMPLATE //
-//////////////
 
 
 // TODO
@@ -764,16 +1198,22 @@ void *runtime_alloc(int size)
 
 #endif // TEMPLATE_IMPLEMENTATION
 #endif // TEMPLATE_HEADER
+/** application.h - Provides a high level interface for starting our application,
+                    binding data, serving files and folders.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef APPLICATION_HEADER
 #define APPLICATION_HEADER
 
 
-/////////////////
-// APPLICATION //
-/////////////////
-
-
 #include <stdbool.h>
+
 
 #define APP_DEFAULT_PORT 8080
 #define APP_HANDLER _app_default_handler
@@ -847,7 +1287,7 @@ void _app_default_handler(int fd)
 int app_start(int port)
 {
     if (port == 0) port = APP_DEFAULT_PORT;
-    runtime_start(network_listen(port, APP_HANDLER))
+    runtime_start(network_listen(port, APP_HANDLER));
     return runtime_main();
 }
 

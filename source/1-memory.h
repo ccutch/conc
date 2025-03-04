@@ -1,19 +1,27 @@
+/** memory.h - Provides a region based memory system for storing data.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-01
+    @version  0.1.0 
+    @license: MIT
+*/
+
+
 #ifndef MEMORY_HEADER
 #define MEMORY_HEADER
-
-
-////////////
-// MEMORY //
-////////////
 
 
 #include <stddef.h>
 #include <stdlib.h>
 
 
-// We need a dynamic way to store data about the current state of
-// our application and the processes that are running. Providing
-// a few common containers for storing data, using the name list.
+//  We need a dynamic way to store data about the current state of
+//  our application and our actively running processes . Providing
+//  a few common containers for storing data, using the name list.
+//
+//    .-----------------------------------------------------.
+//    | <data type> * data_start | int capacity | int count |
+//    '-----------------------------------------------------'
 
 
 // Generic list of integer values, primarily used for storing

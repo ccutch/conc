@@ -1,21 +1,35 @@
-#define RUNTIME_IMPLEMENTATION
-#include "proto/runtime.h"
+/** network.c - Example usage of the network module.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-03
+    @version  0.1.0 
+    @license: MIT
+*/
+
+#include <stdio.h>
+#include <string.h>
+
+#define MEMORY_IMPLEMENTATION
+#include "../source/1-memory.h"
+
+#define RUNTIME_IMPLEMENTATION 
+#include "../source/2-runtime.h"
 
 #define NETWORK_IMPLEMENTATION
-#include "proto/network.h"
+#include "../source/4-network.h"
 
 
 void trim_whitespace(char *buf)
 {
     char *start = buf;
     while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
-        ++start; // Move past leading spaces
+        ++start;
 
     char *end = start + strlen(start) - 1;
     while (end > start && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n'))
-        *end-- = '\0'; // Remove trailing whitespace
+        *end-- = '\0';
 
-    memmove(buf, start, strlen(start) + 1); // Shift buffer content to start
+    memmove(buf, start, strlen(start) + 1);
 }
 
 
@@ -33,23 +47,14 @@ void handler(int fd)
         tcp_write(fd, buf, strlen(buf));
     }
     close(fd);
-}
-
-
-void counter(int count)
-{
-    for (int i = 0; i <= count; i++) {
-        printf("count to %d: %d\n", count, i);
-        runtime_yield();
-    }
+    exit(EXIT_SUCCESS);
 }
 
 
 int main(void)
 {
-    runtime_run(counter(10));
-    runtime_run(counter(20));
-    runtime_run(tcp_listen(9091, handler));
-    runtime_main();
-    return 0;
+
+    runtime_run(tcp_listen(9090, handler));
+
+    return runtime_main();
 }

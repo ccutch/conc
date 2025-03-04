@@ -35,7 +35,14 @@ int main(int argc, char **argv)
             return 1;
         }
 
-        char *input_path = nob_temp_sprintf("./examples/%s.c", example);
+        char *input_path;
+        if (strcmp(example, "app") == 0) {
+            input_path = nob_temp_sprintf("./app.c");
+        } else {
+            input_path = nob_temp_sprintf("./examples/%s.c", example);
+
+        }
+
         char *output_path = nob_temp_sprintf("./build/%s", example);
 
         Nob_Cmd cmd = {0};
