@@ -135,9 +135,7 @@ int system_join(SystemProc * proc) {
     if (proc->err_fd >= 0) close(proc->err_fd);
 
     free(proc);
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
 
     return -1;
 }

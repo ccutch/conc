@@ -107,7 +107,7 @@ void runtime_finish(void);
 void *runtime_alloc(int size);
 
 // Return with a string allocated to current runtime memory region
-char *runtime_sprint(char *, ...);
+char *runtime_sprintf(char *, ...);
 
 // Print a string to stderr using runtime allocation
 void runtime_logf(char *, ...);
@@ -451,7 +451,7 @@ void *runtime_alloc(int size)
     return memory_alloc(running_proc->memory, size);
 }
 
-char *runtime_sprint(char *fmt, ...)
+char *runtime_sprintf(char *fmt, ...)
 {
     va_list args;
 
@@ -476,7 +476,7 @@ void runtime_logf(char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-        perror(runtime_sprint(fmt, args));
+        perror(runtime_sprintf(fmt, args));
     va_end(args);
 }
 
