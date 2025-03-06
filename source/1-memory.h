@@ -17,54 +17,54 @@
 
 //  We need a dynamic way to store data about the current state of
 //  our application and our actively running processes . Providing
-//  a few common containers for storing data, using the name list.
+//  a few common containers for storing data, using the name slice
 //
 //    .-----------------------------------------------------.
-//    | <data type> * data_start | int capacity | int count |
+//    | int capacity | int count | <data type> * data_start | 
 //    '-----------------------------------------------------'
 
 
 // Generic list of integer values, primarily used for storing
 // the ids of processes in their different states
-struct ListOfInt {
-    int *items;
+struct IntSlice {
     int capacity;
     int count;
+    int *items;
 };
 
 
 // Generic list of strings, primarily used for storing lists of
 // null terminated strings
-struct ListOfStr {
-    char **items;
+struct StrSlice {
     int capacity;
     int count;
+    char **items;
 };
 
 
-// appeds a new item to the list's memory after checking if the
+// appeds a new item to the slice's memory after checking if the
 // capacity is full. This will work generically for all lists.
-#define list_append(list, item) ({ \
-    if ((list)->count >= (list)->capacity) { \
-        (list)->capacity += RUNTIME_LIST_SIZE; \
-        (list)->items = realloc((list)->items, (list)->capacity * sizeof(item)); \
+#define slice_append(slice, item) ({ \
+    if ((slice)->count >= (slice)->capacity) { \
+        (slice)->capacity += RUNTIME_LIST_SIZE; \
+        (slice)->items = realloc((slice)->items, (slice)->capacity * sizeof(item)); \
     } \
-    (list)->items[(list)->count++] = (item); \
+    (slice)->items[(slice)->count++] = (item); \
 })
 
 
-// removes an item from the list's memory and replaces it with
-// the last item in the list, while also decrementing the count
-#define list_remove(list, index) ({ \
-    if ((index) >= (list)->count) { \
+// removes an item from the slice's memory and replaces it with
+// the last item in the slice, while also decrementing the count
+#define slice_remove(slice, index) ({ \
+    if ((index) >= (slice)->count) { \
         perror("[ERROR] Index out of bounds\n"); \
         exit(1); \
     } \
-    (list)->items[index] = (list)->items[--(list)->count]; \
+    (slice)->items[index] = (slice)->items[--(slice)->count]; \
 })
 
 
-#define MEMORY_REGION_SIZE 1 * getpagesize()
+#define MEMORY_DEFAULT_REGION_SIZE 512 * getpagesize()
 
 
 // Memory regions are used to store data in a way that will be all
@@ -106,18 +106,17 @@ void memory_destroy(MemoryRegion *region);
 
 MemoryRegion *memory_new_region(int capacity)
 {
-    // Allocating memory for the region and failing gracefully
+    // Allocating memory for the region
     MemoryRegion *region = malloc(sizeof(MemoryRegion));
     if (region == NULL) return NULL;
 
-    // Allocating memory for the region
+    // Allocating dynamic memory in region 
     region->memory = malloc(capacity);
     if (region->memory == NULL) {
         free(region);
         return NULL;
     }
 
-    // Initialize remaining fields to zero
     region->capacity = capacity;
     region->count = 0;
     region->next = NULL;
@@ -133,18 +132,25 @@ void *memory_alloc(MemoryRegion *region, int size)
     MemoryRegion *current = region;
 
     // Find a region that has enough capacity to store the memory
-    while (current->next != NULL && current->count + size > current->capacity) {
+    while (current->next != NULL && current->count + size > current->capacity)
         current = current->next;
-    }
 
     // If we reached the end and still don't have enough capacity
     // we need to create a new region and add it to the last region
     if (current->count + size > current->capacity) {
-        int capacity = (region->capacity > size) ? region->capacity : size;
+
+        // Make sure that we are allocating enough memory for the
+        // allocation we are going to make
+        int capacity = (MEMORY_DEFAULT_REGION_SIZE > size)
+            ? MEMORY_DEFAULT_REGION_SIZE
+            : size;
+
         MemoryRegion *new_region = memory_new_region(capacity);
         if (new_region == NULL) return NULL;
+
         current->next = new_region;
         current = new_region;
+
     }
 
     // Allocating memory for the region
@@ -158,8 +164,10 @@ int memory_size(MemoryRegion *region)
 {
     int size = 0;
     while (region != NULL) {
+
         size += region->capacity;
         region = region->next;
+
     }
     return size;
 }
@@ -167,12 +175,13 @@ int memory_size(MemoryRegion *region)
 
 void memory_destroy(MemoryRegion *region)
 {
-    // Recursively free all child regions 
     while (region != NULL) {
+
         MemoryRegion *next = region->next;
         free(region->memory);
         free(region);
         region = next;
+
     }
 }
 

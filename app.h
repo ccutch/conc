@@ -102,31 +102,31 @@
 //  a few common containers for storing data, using the name list.
 //
 //    .-----------------------------------------------------.
-//    | <data type> * data_start | int count | int capacity |
+//    | <data type> * data_start | int capacity | int count |
 //    '-----------------------------------------------------'
 
 
 // Generic list of integer values, primarily used for storing
 // the ids of processes in their different states
-struct ListOfInt {
+struct IntSlice {
     int *items;
-    int count;
     int capacity;
+    int count;
 };
 
 
 // Generic list of strings, primarily used for storing lists of
 // null terminated strings
-struct ListOfStr {
+struct StrSlice {
     char **items;
-    int count;
     int capacity;
+    int count;
 };
 
 
 // appeds a new item to the list's memory after checking if the
 // capacity is full. This will work generically for all lists.
-#define list_append(list, item) ({ \
+#define slice_append(list, item) ({ \
     if ((list)->count >= (list)->capacity) { \
         (list)->capacity += RUNTIME_LIST_SIZE; \
         (list)->items = realloc((list)->items, (list)->capacity * sizeof(item)); \
@@ -137,7 +137,7 @@ struct ListOfStr {
 
 // removes an item from the list's memory and replaces it with
 // the last item in the list, while also decrementing the count
-#define list_remove(list, index) ({ \
+#define slice_remove(list, index) ({ \
     if ((index) >= (list)->count) { \
         perror("[ERROR] Index out of bounds\n"); \
         exit(1); \
@@ -146,7 +146,7 @@ struct ListOfStr {
 })
 
 
-#define MEMORY_REGION_SIZE 1 * getpagesize()
+#define MEMORY_DEFAULT_REGION_SIZE 1 * getpagesize()
 
 
 // Memory regions are used to store data in a way that will be all
@@ -215,9 +215,8 @@ void *memory_alloc(MemoryRegion *region, int size)
     MemoryRegion *current = region;
 
     // Find a region that has enough capacity to store the memory
-    while (current->next != NULL && current->count + size > current->capacity) {
+    while (current->next != NULL && current->count + size > current->capacity)
         current = current->next;
-    }
 
     // If we reached the end and still don't have enough capacity
     // we need to create a new region and add it to the last region
@@ -362,10 +361,8 @@ void runtime_continue(void);
 // Resume execution of the coroutine by moving the pointer to %rsp
 void runtime_resume(void* ptr);
 
-
 // Finish the current process and resume the next active process
 void runtime_finish(void);
-
 
 // Allocate memory in the current process that will be freed later
 void *runtime_alloc(int size);
@@ -406,16 +403,16 @@ static int runtime_current_proc = 0;
 static struct RuntimePolls runtime_polls = {0};
 
 // Static buffer of all processes running or not
-static struct RuntimeProcs runtime_all_procs = {.count = 1}; 
+static struct RuntimeProcs runtime_all_procs = {.count = 1};
 
 // Reference list of all actively running processes
-static struct ListOfInt runtime_running_procs = {.count = 1};
+static struct IntSlice runtime_running_procs = {.count = 1};
 
 // Reference list of all processes wainting for io
-static struct ListOfInt runtime_waiting_procs = {0};
+static struct IntSlice runtime_waiting_procs = {0};
 
 // Reference list of all processes that finished
-static struct ListOfInt runtime_stopped_procs = {0};
+static struct IntSlice runtime_stopped_procs = {0};
 
 
 int runtime_unblock_fd(int fd)
@@ -448,9 +445,9 @@ void runtime_start(void (*fn)(void*), void *arg) {
         id = runtime_stopped_procs.items[--runtime_stopped_procs.count];
     } else {
         // Create a new process and allocate memory region
-        list_append(&runtime_all_procs, ((struct RuntimeProc){0}));
+        slice_append(&runtime_all_procs, ((struct RuntimeProc){0}));
         id = runtime_all_procs.count - 1;
-        runtime_all_procs.items[id].memory = memory_new_region(MEMORY_REGION_SIZE);
+        runtime_all_procs.items[id].memory = memory_new_region(MEMORY_DEFAULT_REGION_SIZE);
 
         // Allocate stack with a guard page
         void *stack = mmap(NULL, RUNTIME_PROC_SIZE + getpagesize(), PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -482,7 +479,7 @@ void runtime_start(void (*fn)(void*), void *arg) {
     runtime_all_procs.items[id].stack_pointer = pointer;
 
     // Append to list of running processes
-    list_append(&runtime_running_procs, id);
+    slice_append(&runtime_running_procs, id);
 }
 
 
@@ -540,13 +537,13 @@ void _runtime_read(int fd, void *rsp)
 
     // Creating a pollfd for the file descriptor in read normal mode
     struct pollfd poll = {.fd = fd, .events = POLLRDNORM};
-    list_append(&runtime_polls, poll);
+    slice_append(&runtime_polls, poll);
 
     // We are not incrementing the current process like in
     // the yield function because this function is moved to the list
     // of waiting processes.
-    list_append(&runtime_waiting_procs, running_id);
-    list_remove(&runtime_running_procs, runtime_current_proc);
+    slice_append(&runtime_waiting_procs, running_id);
+    slice_remove(&runtime_running_procs, runtime_current_proc);
 
     // Continue on to the next running process
     runtime_continue();
@@ -580,13 +577,13 @@ void _runtime_write(int fd, void *rsp)
 
     // Creating a pollfd for the file descriptor in write normal mode
     struct pollfd poll = {.fd = fd, .events = POLLWRNORM};
-    list_append(&runtime_polls, poll);
+    slice_append(&runtime_polls, poll);
 
     // We are not incrementing the current process like in
     // the yield function because this function is moved to the list
     // of waiting processes.
-    list_append(&runtime_waiting_procs, running_id);
-    list_remove(&runtime_running_procs, runtime_current_proc);
+    slice_append(&runtime_waiting_procs, running_id);
+    slice_remove(&runtime_running_procs, runtime_current_proc);
 
     // Continue on to the next running process
     runtime_continue();
@@ -629,9 +626,9 @@ void runtime_continue(void)
         for (int i = 0; i < runtime_polls.count;) {
             if (runtime_polls.items[i].revents) {
                 int proc_id = runtime_waiting_procs.items[i];
-                list_remove(&runtime_polls, i);
-                list_remove(&runtime_waiting_procs, i);
-                list_append(&runtime_running_procs, proc_id);
+                slice_remove(&runtime_polls, i);
+                slice_remove(&runtime_waiting_procs, i);
+                slice_append(&runtime_running_procs, proc_id);
             } else { ++i; }
         }
     }
@@ -662,8 +659,8 @@ void runtime_finish(void)
 
     region = running_proc.memory;
 
-    list_append(&runtime_stopped_procs, running_id);
-    list_remove(&runtime_running_procs, runtime_current_proc);
+    slice_append(&runtime_stopped_procs, running_id);
+    slice_remove(&runtime_running_procs, runtime_current_proc);
 
     if (runtime_polls.count > 0) {
         int timeout = runtime_running_procs.count > 1 ? 0 : -1;
@@ -676,18 +673,18 @@ void runtime_finish(void)
         for (int i = 0; i < runtime_polls.count;) {
             if (runtime_polls.items[i].revents) {
                 int ctx = runtime_waiting_procs.items[i];
-                list_remove(&runtime_polls, i);
-                list_remove(&runtime_waiting_procs, i);
-                list_append(&runtime_running_procs, ctx);
+                slice_remove(&runtime_polls, i);
+                slice_remove(&runtime_waiting_procs, i);
+                slice_append(&runtime_running_procs, ctx);
             } else { i++; }
         }
     }
 
     // Ensure we don't stop if there's at least one coroutine available
     if (runtime_running_procs.count == 0 && runtime_waiting_procs.count > 0) {
-        list_append(&runtime_running_procs, runtime_waiting_procs.items[0]);
-        list_remove(&runtime_waiting_procs, 0);
-        list_remove(&runtime_polls, 0);
+        slice_append(&runtime_running_procs, runtime_waiting_procs.items[0]);
+        slice_remove(&runtime_waiting_procs, 0);
+        slice_remove(&runtime_polls, 0);
     }
 
     if (runtime_running_procs.count > 0) {
@@ -700,11 +697,23 @@ void runtime_finish(void)
 
 void *runtime_alloc(int size)
 {
+    // Lazy initialization of the first process
+    // since we are not always using it.
+    if (runtime_running_procs.count == 1 && runtime_all_procs.capacity == 0) {
+        runtime_all_procs.items = malloc(sizeof(struct RuntimeProc));
+        runtime_all_procs.items[0] = (struct RuntimeProc){0};
+        runtime_all_procs.items[0].memory = memory_new_region(MEMORY_DEFAULT_REGION_SIZE);
+        runtime_all_procs.capacity = 1;
+        runtime_running_procs.items = malloc(sizeof(int));
+        runtime_running_procs.items[0] = 0;
+        runtime_running_procs.capacity = 1;
+    }
+
     int process_id = runtime_running_procs.items[runtime_current_proc];
     struct RuntimeProc *running_proc = &runtime_all_procs.items[process_id];
 
     if (running_proc->memory == NULL) {
-        int region_size = MEMORY_REGION_SIZE > size ? MEMORY_REGION_SIZE : size;
+        int region_size = MEMORY_DEFAULT_REGION_SIZE > size ? MEMORY_DEFAULT_REGION_SIZE : size;
         running_proc->memory = memory_new_region(region_size);
         if (running_proc->memory == NULL) {
             runtime_logf("[ERROR] Failed to allocate memory for runtime process\n");
@@ -739,9 +748,23 @@ char *runtime_sprintf(char *fmt, ...)
 void runtime_logf(char *fmt, ...)
 {
     va_list args;
+
+    // Count the size of the string to allocate memory
     va_start(args, fmt);
-        perror(runtime_sprintf(fmt, args));
+        int count = vsnprintf(NULL, 0, fmt, args);
     va_end(args);
+
+    // Allocating memory in our current process region
+    char *string = runtime_alloc(count + 1);
+    if (string == NULL) return;
+
+    // Performing actual print opperation to the string
+    va_start(args, fmt);
+        vsnprintf(string, count + 1, fmt, args);
+    va_end(args);
+
+    fprintf(stderr, "%s", string);
+    fflush(stderr);
 }
 
 
@@ -885,9 +908,7 @@ int system_join(SystemProc * proc) {
     if (proc->err_fd >= 0) close(proc->err_fd);
 
     free(proc);
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
 
     return -1;
 }
@@ -1220,13 +1241,286 @@ int tcp_write(int fd, char *buf, int size)
 #define DATA_HEADER
 
 
-// TODO
+typedef struct DataValue {
+    enum {
+        // Our "empty" DataValue
+        DATA_EMPTY,
+
+        // Boolean DataValue
+        DATA_BOOLEAN,
+
+        // Integer DataValue
+        DATA_INTEGER,
+
+        // Decimal DataValue
+        DATA_NUMBER,
+
+        // String DataValue
+        DATA_STRING,
+
+        // List of DataValues 
+        DATA_LIST,
+
+        // Hash table of DataValues
+        DATA_OBJECT,
+    } type;
+
+    union {
+        bool boolean;
+        int integer;
+        char* string;
+        float number;
+
+        struct DataList {
+            struct DataList* next;
+            struct DataValue* values;
+            int count;
+            int capacity;
+        } list;
+
+        struct DataObject {
+            struct DataEntry {
+                char* label;
+                struct DataValue* value;
+            }* items;
+
+            int* indexes;
+            int count;
+            int capacity;
+        } object;
+    };
+} DataValue;
+
+
+// Construct a new empty DataValue
+DataValue data_empty(void);
+
+// Construct a new DataValue from a boolean
+DataValue data_boolean(bool boolean);
+
+// Construct a new DataValue from an integer
+DataValue data_integer(int integer);
+
+// Construct a new DataValue from a number
+DataValue data_number(float number);
+
+// Construct a new DataValue from a string
+DataValue data_string(char* string);
+
+// Construct a new DataValue list container
+DataValue data_list(DataValue head, ...);
+
+// Append a DataValue to an existing list
+int data_slice_append(DataValue *list, DataValue value);
+
+// Construct a new DataValue hash map container
+DataValue data_object(DataValue head, ...);
+
+// Transform a DataValue into a DataString value
+DataValue data_to_string(DataValue value);
+
+// Marshal a DataValue into a JSON string
+char* data_to_json(DataValue value);
+
+
+#define DATA_END data_empty()
 
 
 #ifdef DATA_IMPLEMENTATION
     
 
-// TODO
+DataValue data_empty(void)
+{
+    DataValue* value = runtime_alloc(sizeof(DataValue));
+    value->type = DATA_EMPTY;
+    return *value;
+}
+
+DataValue data_boolean(bool boolean)
+{
+    DataValue* value = runtime_alloc(sizeof(DataValue));
+    value->type = DATA_BOOLEAN;
+    value->boolean = boolean;
+    return *value;
+}
+
+
+DataValue data_integer(int integer)
+{
+    DataValue* value = runtime_alloc(sizeof(DataValue));
+    value->type = DATA_INTEGER;
+    value->integer = integer;
+    return *value;
+}
+
+
+DataValue data_number(float number)
+{
+    DataValue* value = runtime_alloc(sizeof(DataValue));
+    value->type = DATA_NUMBER;
+    value->number = number;
+    return *value;
+}
+
+
+DataValue data_string(char* string)
+{
+    DataValue* value = runtime_alloc(sizeof(DataValue));
+    value->type = DATA_STRING;
+    value->string = string;
+    return *value;
+}
+
+
+DataValue data_list(DataValue head, ...)
+{
+    DataValue* value = runtime_alloc(sizeof(DataValue));
+    value->type = DATA_LIST;
+    value->list = (struct DataList) {
+        .next = NULL,
+        .values =runtime_alloc(sizeof(DataValue) * 64),
+        .count = 0,
+        .capacity = 64,
+    };
+
+    if (head.type == DATA_EMPTY) return *value;
+
+    va_list args;
+    va_start(args, head);
+
+        data_slice_append(value, head);
+        while (true) {
+            DataValue item = va_arg(args, DataValue);
+            if (item.type == DATA_EMPTY) break;
+            data_slice_append(value, item);
+        }
+
+    va_end(args);
+    return *value;
+}
+
+
+int data_slice_append(DataValue *list, DataValue value)
+{
+    if (list->type != DATA_LIST) return 0;
+
+    struct DataList* current = &list->list;
+    if (list == NULL) return 0;
+
+    while (current->next != NULL && current->count >= current->capacity)
+        current = current->next;
+
+    if (current->count >= current->capacity) {
+        struct DataList *next = runtime_alloc(sizeof(struct DataList));
+        next->values = runtime_alloc(sizeof(struct DataValue) * current->capacity);
+        next->count = 0;
+        next->capacity = current->capacity;
+        current->next = next;
+        current = next;
+    }
+
+    current->values[current->count++] = value;
+    return current->count - 1;
+}
+
+
+DataValue data_object(DataValue head, ...)
+{
+    (void)head;
+    DataValue *value = runtime_alloc(sizeof(DataValue));
+    
+    value->type = DATA_OBJECT;
+    // TODO
+    return *value;
+}
+
+
+DataValue data_to_string(DataValue value)
+{
+    switch (value.type)
+    {
+    case DATA_EMPTY: return data_string("");
+    case DATA_BOOLEAN: return value.boolean ? data_string("true") : data_string("false");
+    case DATA_INTEGER: return data_string(runtime_sprintf("%d", value.integer));
+    case DATA_NUMBER: return data_string(runtime_sprintf("%f", value.number));
+    case DATA_LIST: {
+        char* res = runtime_alloc(2048);
+        res[0] = '[';
+        res[1] = '\0';
+
+        for (int i = 0; i < value.list.count; i++) {
+            strcat(res, data_to_string(value.list.values[i]).string);
+            if (i < value.list.count - 1) strcat(res, ", ");
+        }
+
+        strcat(res, "]");
+        return data_string(res);
+    };
+
+    case DATA_OBJECT: {
+        char* res = runtime_alloc(2048);
+        res[0] = '{';
+        res[1] = '\0';
+
+        for (int i = 0; i < value.object.count; i++) {
+            char* label = value.object.items[i].label;
+            char* content = data_to_string(*value.object.items[i].value).string;
+            strcat(res, runtime_sprintf("\"%s\": %s", label, content));
+            if (i < value.object.count - 1) strcat(res, ", ");
+        }
+
+        strcat(res, "}");
+        return data_string(res);
+    };
+
+    // Default case is treated as string value
+    default: return value;
+    }
+}
+
+
+char* data_to_json(DataValue value)
+{
+    switch (value.type)
+    {
+    case DATA_BOOLEAN: return value.boolean ? "true" : "false";
+    case DATA_INTEGER: return runtime_sprintf("%d", value.integer);
+    case DATA_NUMBER: return runtime_sprintf("%f", value.number);
+    case DATA_STRING: return runtime_sprintf("\"%s\"", value.string);
+    case DATA_LIST: {
+        char* res = runtime_alloc(2048);
+        res[0] = '[';
+        res[1] = '\0';
+
+        for (int i = 0; i < value.list.count; i++) {
+            strcat(res, data_to_json(value.list.values[i]));
+            if (i < value.list.count - 1) strcat(res, ", ");
+        }
+
+        strcat(res, "]");
+        return res;
+    };
+
+    case DATA_OBJECT: {
+        char* res = runtime_alloc(2048);
+        res[0] = '{';
+        res[1] = '\0';
+
+        for (int i = 0; i < value.object.count; i++) {
+            char* label = value.object.items[i].label;
+            char* content = data_to_json(*value.object.items[i].value);
+            strcat(res, runtime_sprintf("\"%s\": %s", label, content));
+            if (i < value.object.count - 1) strcat(res, ", ");
+        }
+
+        strcat(res, "}");
+        return res;
+    };
+
+    // Default case is treated as empty value
+    default: return "null";
+    }
+}
 
 
 #endif // DATA_IMPLEMENTATION

@@ -15,8 +15,11 @@
     Heading  ---- Provides a high level overview of the project and sets up a
                   convienent way to turn on all features of the library.
 
-    Memory ------ Provides common data structures for storing data and the
-                  implementation of our region based memory system.
+    Data Types -- Provides a set of data types that are used to marshall and
+                  unmarshall data from the database, templates, and APIs.
+
+    Memory ------ Provides a memory management system that is based on arena
+                  allocation, and tools for viewing and manipulating memory.
 
     Runtime ----- Provides a cooperative runtime for our application for
                   managing memory and handling multiple processes at once.
@@ -26,9 +29,6 @@
 
     Network ----- Provides non-blocking tcp server, a basic HTTP interface, and
                   a path based router for handling incoming requests.
-
-    Data -------- Provides a shallow layer of abstraction on top of json like 
-                  data structures to allow for reflection and serialization.
 
     Database ---- Provides a wrapper around the sqlite3 library to store data in
                   a unstructured way with documents-based storage.
@@ -52,7 +52,7 @@
     #define RUNTIME_IMPLEMENTATION
     #define SYSTEM_IMPLEMENTATION
     #define NETWORK_IMPLEMENTATION
-    #define DATA_IMPLEMENTATION
+    #define DATATYPES_IMPLEMENTATION
     #define DATABASE_IMPLEMENTATION
     #define TEMPLATE_IMPLEMENTATION
     #define APPLICATION_IMPLEMENTATION

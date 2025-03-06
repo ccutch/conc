@@ -55,7 +55,7 @@
 
 // Generic list of integer values, primarily used for storing
 // the ids of processes in their different states
-struct ListOfInt {
+struct IntSlice {
     int *items;
     int capacity;
     int count;
@@ -63,7 +63,7 @@ struct ListOfInt {
 
 // Generic list of strings, primarily used for storing lists of
 // null terminated strings
-struct ListOfStr {
+struct StrSlice {
     char **items;
     int capacity;
     int count;
@@ -71,7 +71,7 @@ struct ListOfStr {
 
 // appeds a new item to the list's memory after checking if the
 // capacity is full. This will work generically for all lists.
-#define list_append(list, item) ({ \
+#define slice_append(list, item) ({ \
     if ((list)->count >= (list)->capacity) { \
         (list)->capacity += RUNTIME_LIST_SIZE; \
         (list)->items = realloc((list)->items, (list)->capacity * sizeof(item)); \
@@ -81,7 +81,7 @@ struct ListOfStr {
 
 // removes an item from the list's memory and replaces it with
 // the last item in the list, while also decrementing the count
-#define list_remove(list, index) ({ \
+#define slice_remove(list, index) ({ \
     if ((index) >= (list)->count) { \
         fprintf(stderr, "[ERROR] Index out of bounds\n"); \
         exit(1); \
@@ -216,8 +216,8 @@ void *runtime_alloc(int size);
 
 struct NetworkRequest {
     int conn_fd;
-    struct ListOfStr req_headers;
-    struct ListOfStr res_headers;
+    struct StrSlice req_headers;
+    struct StrSlice res_headers;
     char *method;
     char *path;
 };
@@ -315,13 +315,13 @@ static struct RuntimePolls runtime_polls = {0};
 static struct RuntimeProcs runtime_all_procs = {.count = 1}; 
 
 // Reference list of all actively running processes
-static struct ListOfInt runtime_running_procs = {.count = 1};
+static struct IntSlice runtime_running_procs = {.count = 1};
 
 // Reference list of all processes wainting for io
-static struct ListOfInt runtime_waiting_procs = {0};
+static struct IntSlice runtime_waiting_procs = {0};
 
 // Reference list of all processes that finished
-static struct ListOfInt runtime_stopped_procs = {0};
+static struct IntSlice runtime_stopped_procs = {0};
 
 
 struct RuntimePage *runtime_new_page(int capacity)
@@ -375,7 +375,7 @@ void runtime_start(void (*fn)(void*), void *arg)
     if (runtime_stopped_procs.count > 0)
       id = runtime_stopped_procs.items[--runtime_stopped_procs.count];
     else {
-        list_append(&runtime_all_procs, ((struct RuntimeProc){0}));
+        slice_append(&runtime_all_procs, ((struct RuntimeProc){0}));
         id = runtime_all_procs.count - 1;
         runtime_all_procs.items[id].head = runtime_new_page(RUNTIME_PAGE_SIZE);
         runtime_all_procs.items[id].registers = mmap(NULL, RUNTIME_PROC_SIZE, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE|MAP_STACK|MAP_GROWSDOWN, -1, 0);
@@ -400,7 +400,7 @@ void runtime_start(void (*fn)(void*), void *arg)
     runtime_all_procs.items[id].stack_pointer = pointer;
 
     // Appending to the list of running processes
-    list_append(&runtime_running_procs, id);
+    slice_append(&runtime_running_procs, id);
 }
 
 
@@ -458,13 +458,13 @@ void _runtime_read(int fd, void *rsp)
 
     // Creating a pollfd for the file descriptor in read normal mode
     struct pollfd poll = {.fd = fd, .events = POLLRDNORM};
-    list_append(&runtime_polls, poll);
+    slice_append(&runtime_polls, poll);
 
     // We are not incrementing the current process like in
     // the yield function because this function is moved to the list
     // of waiting processes.
-    list_append(&runtime_waiting_procs, running_id);
-    list_remove(&runtime_running_procs, runtime_current_proc);
+    slice_append(&runtime_waiting_procs, running_id);
+    slice_remove(&runtime_running_procs, runtime_current_proc);
 
     // Continue on to the next running process
     runtime_continue();
@@ -498,13 +498,13 @@ void _runtime_write(int fd, void *rsp)
 
     // Creating a pollfd for the file descriptor in write normal mode
     struct pollfd poll = {.fd = fd, .events = POLLWRNORM};
-    list_append(&runtime_polls, poll);
+    slice_append(&runtime_polls, poll);
 
     // We are not incrementing the current process like in
     // the yield function because this function is moved to the list
     // of waiting processes.
-    list_append(&runtime_waiting_procs, running_id);
-    list_remove(&runtime_running_procs, runtime_current_proc);
+    slice_append(&runtime_waiting_procs, running_id);
+    slice_remove(&runtime_running_procs, runtime_current_proc);
 
     // Continue on to the next running process
     runtime_continue();
@@ -547,9 +547,9 @@ void runtime_continue(void)
         for (int i = 0; i < runtime_polls.count;) {
             if (runtime_polls.items[i].revents) {
                 int proc_id = runtime_waiting_procs.items[i];
-                list_remove(&runtime_polls, i);
-                list_remove(&runtime_waiting_procs, i);
-                list_append(&runtime_running_procs, proc_id);
+                slice_remove(&runtime_polls, i);
+                slice_remove(&runtime_waiting_procs, i);
+                slice_append(&runtime_running_procs, proc_id);
             } else { ++i; }
         }
     }
@@ -584,8 +584,8 @@ void runtime_finish(void)
     page = running_proc.head;
     runtime_total_page_size(page);
 
-    list_append(&runtime_stopped_procs, running_id);
-    list_remove(&runtime_running_procs, runtime_current_proc);
+    slice_append(&runtime_stopped_procs, running_id);
+    slice_remove(&runtime_running_procs, runtime_current_proc);
 
     if (runtime_polls.count > 0) {
         int timeout = runtime_running_procs.count > 1 ? 0 : -1;
@@ -598,18 +598,18 @@ void runtime_finish(void)
         for (int i = 0; i < runtime_polls.count;) {
             if (runtime_polls.items[i].revents) {
                 int ctx = runtime_waiting_procs.items[i];
-                list_remove(&runtime_polls, i);
-                list_remove(&runtime_waiting_procs, i);
-                list_append(&runtime_running_procs, ctx);
+                slice_remove(&runtime_polls, i);
+                slice_remove(&runtime_waiting_procs, i);
+                slice_append(&runtime_running_procs, ctx);
             } else { i++; }
         }
     }
 
     // Ensure we don't stop if there's at least one coroutine available
     if (runtime_running_procs.count == 0 && runtime_waiting_procs.count > 0) {
-        list_append(&runtime_running_procs, runtime_waiting_procs.items[0]);
-        list_remove(&runtime_waiting_procs, 0);
-        list_remove(&runtime_polls, 0);
+        slice_append(&runtime_running_procs, runtime_waiting_procs.items[0]);
+        slice_remove(&runtime_waiting_procs, 0);
+        slice_remove(&runtime_polls, 0);
     }
 
     if (runtime_running_procs.count > 0) {
@@ -854,7 +854,7 @@ struct DataValue *data_list(struct DataValue *head, ...)
     value->type = DATA_LIST;
     value->list.count = 0;
 
-    list_append(&value->list, head);
+    slice_append(&value->list, head);
 
     while (true) {
         // struct DataValue item = va_arg(args, (struct DataValue));
@@ -863,7 +863,7 @@ struct DataValue *data_list(struct DataValue *head, ...)
         // struct DataValue *entry = runtime_alloc(sizeof(struct DataValue));
         // *entry = item;
 
-        // list_append(&result->list, entry);
+        // slice_append(&result->list, entry);
     }
 
     va_end(args);
@@ -887,7 +887,7 @@ struct DataValue *data_map(struct DataValue *head, ...)
     value->map.count = 0;
 
     if (head != NULL && head->type == DATA_TUPLE)
-        list_append(&value->map, &head->tuple);
+        slice_append(&value->map, &head->tuple);
 
     while (true) {
         // struct DataValue item = va_arg(args, (struct DataValue));
@@ -896,7 +896,7 @@ struct DataValue *data_map(struct DataValue *head, ...)
         // struct DataValue *entry = runtime_alloc(sizeof(struct DataValue));
         // *entry = item;
 
-        // list_append(&result->map, entry);
+        // slice_append(&result->map, entry);
     }
 
     va_end(args);
