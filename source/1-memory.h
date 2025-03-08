@@ -17,7 +17,7 @@
 
 //  We need a dynamic way to store data about the current state of
 //  our application and our actively running processes . Providing
-//  a few common containers for storing data, using the name slice
+//  a few common containers for storing data, using the name list.
 //
 //    .-----------------------------------------------------.
 //    | int capacity | int count | <data type> * data_start | 
@@ -35,36 +35,36 @@ struct IntSlice {
 
 // Generic list of strings, primarily used for storing lists of
 // null terminated strings
-struct StrSlice {
+struct ListOfStr {
     int capacity;
     int count;
     char **items;
 };
 
 
-// appeds a new item to the slice's memory after checking if the
+// appeds a new item to the list's memory after checking if the
 // capacity is full. This will work generically for all lists.
-#define slice_append(slice, item) ({ \
-    if ((slice)->count >= (slice)->capacity) { \
-        (slice)->capacity += RUNTIME_LIST_SIZE; \
-        (slice)->items = realloc((slice)->items, (slice)->capacity * sizeof(item)); \
+#define list_append(list, item) ({ \
+    if ((list)->count >= (list)->capacity) { \
+        (list)->capacity += RUNTIME_LIST_SIZE; \
+        (list)->items = realloc((list)->items, (list)->capacity * sizeof(item)); \
     } \
-    (slice)->items[(slice)->count++] = (item); \
+    (list)->items[(list)->count++] = (item); \
 })
 
 
-// removes an item from the slice's memory and replaces it with
-// the last item in the slice, while also decrementing the count
-#define slice_remove(slice, index) ({ \
-    if ((index) >= (slice)->count) { \
+// removes an item from the list's memory and replaces it with
+// the last item in the list, while also decrementing the count
+#define list_remove(list, index) ({ \
+    if ((index) >= (list)->count) { \
         perror("[ERROR] Index out of bounds\n"); \
         exit(1); \
     } \
-    (slice)->items[index] = (slice)->items[--(slice)->count]; \
+    (list)->items[index] = (list)->items[--(list)->count]; \
 })
 
 
-#define MEMORY_DEFAULT_REGION_SIZE 512 * getpagesize()
+#define MEMORY_DEFAULT_REGION_SIZE 1 * getpagesize()
 
 
 // Memory regions are used to store data in a way that will be all
