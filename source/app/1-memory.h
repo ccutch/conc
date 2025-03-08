@@ -1,8 +1,8 @@
 /** memory.h - Provides a region based memory system for storing data.
 
     @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
-    @date:    2025-03-01
-    @version  0.1.0 
+    @date:    2025-03-08
+    @version  0.1.1 
     @license: MIT
 */
 

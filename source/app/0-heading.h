@@ -30,19 +30,19 @@
     Network ----- Provides non-blocking tcp server, a basic HTTP interface, and
                   a path based router for handling incoming requests.
 
-    Database ---- Provides a wrapper around the sqlite3 library to store data in
-                  a unstructured way with documents-based storage.
-
     Template ---- Provides a templating engine that will allow us to generate
                   HTML from our data structures, inspired by Go.
+
+    Database ---- Provides a wrapper around the sqlite3 library to store data in
+                  a unstructured way with documents-based storage.
            
     Application - Provides a high level interface for starting our application,
                   binding data, serving files and folders.
 
 
     @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
-    @date:    2025-03-01
-    @version  0.1.0
+    @date:    2025-03-08
+    @version  0.1.1
     @license: MIT
 */
 
