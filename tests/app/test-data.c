@@ -6,7 +6,7 @@
 #include "../../source/app/2-runtime.h"
 
 #define DATA_IMPLEMENTATION
-#include "../../source/app/3-data-types.h"
+#include "../../source/app/5-data-types.h"
 
 
 #include <assert.h>
@@ -24,8 +24,8 @@ int main(void)
     DataValue* integer = data_integer(42);
     assert(integer->integer == 42);
 
-    DataValue* number = data_number(3.14);
-    assert(number->decimal == 3.14);
+    DataValue* decimal = data_decimal(3.14);
+    assert(decimal->decimal == 3.14);
 
     DataValue* string = data_string("Hello World");
     assert(strcmp(string->string, "Hello World") == 0);
@@ -114,6 +114,46 @@ int main(void)
 
 
     data_list_remove(bigList, 0);
+
+    // Test Conversion Functions
+    assert(data_to_boolean(data_boolean(true))->boolean == true);
+    assert(data_to_boolean(data_integer(1))->boolean == true);
+    assert(data_to_boolean(data_decimal(1.0))->boolean == true);
+    assert(data_to_boolean(data_string("true"))->boolean == true);
+    assert(data_to_boolean(data_string("false"))->boolean == false);
+    assert(data_to_boolean(data_tuple(data_boolean(true), data_boolean(true)))->boolean == true);
+    assert(data_to_boolean(data_tuple(data_boolean(true), data_boolean(false)))->boolean == false);
+    assert(data_to_boolean(data_tuple(data_boolean(false), data_boolean(false)))->boolean == false);
+    assert(data_to_boolean(data_list(NULL))->boolean == false);
+    assert(data_to_boolean(data_list(data_empty()))->boolean == false);
+    assert(data_to_boolean(data_list(data_string("full")))->boolean == true);
+
+    assert(data_to_integer(data_boolean(true))->integer == 1);
+    assert(data_to_integer(data_integer(1))->integer == 1);
+    assert(data_to_integer(data_decimal(2.0))->integer == 2);
+    assert(data_to_integer(data_string("3"))->integer == 3);
+    assert(data_to_integer(data_tuple(data_string("1"), data_string("2")))->integer == 3);
+    assert(data_to_integer(data_list(data_string("1"), data_string("2"), NULL))->integer == 2);
+    assert(data_to_integer(data_dict(data_entry("1", data_string("2")), NULL))->integer == 1);
+
+    assert(data_to_decimal(data_boolean(true))->decimal == 1.0);    
+    assert(data_to_decimal(data_integer(1))->decimal == 1.0);
+    assert(data_to_decimal(data_decimal(2.0))->decimal == 2.0);
+    assert(data_to_decimal(data_string("3"))->decimal == 3.0);
+    assert(data_to_decimal(data_tuple(data_string("1"), data_string("2")))->decimal == 3.0);
+    assert(data_to_decimal(data_list(data_string("1"), data_string("2"), NULL))->decimal == 2.0);
+    assert(data_to_decimal(data_dict(data_entry("1", data_string("2")), NULL))->decimal == 1.0);
+
+
+    assert(strcmp(data_to_string(data_boolean(true))->string, "true") == 0);
+    assert(strcmp(data_to_string(data_boolean(false))->string,"false") == 0);
+    assert(strcmp(data_to_string(data_integer(1))->string, "1") == 0);
+    assert(strcmp(data_to_string(data_decimal(2.0))->string, "2.000000") == 0);
+    assert(strcmp(data_to_string(data_string("foobar"))->string, "foobar") == 0);
+    assert(strcmp(data_to_string(data_tuple(data_string("1"), data_string("2")))->string, "(1, 2)") == 0);
+    assert(strcmp(data_to_string(data_list(data_string("1"), data_string("2"), NULL))->string, "[1, 2]") == 0);
+    assert(strcmp(data_to_string(data_dict(data_entry("1", data_string("2")), NULL))->string, "{\"1\": 2}") == 0);
+
 
     printf("✅ All tests passed!\n");
     return EXIT_SUCCESS;

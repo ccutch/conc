@@ -24,7 +24,7 @@ typedef struct DataValue {
         DATA_EMPTY,
         DATA_BOOLEAN,
         DATA_INTEGER,
-        DATA_NUMBER,
+        DATA_DECIMAL,
         DATA_STRING,
         DATA_TUPLE,
         DATA_LIST,
@@ -76,7 +76,7 @@ DataValue* data_boolean(bool boolean);
 
 DataValue* data_integer(int integer);
 
-DataValue* data_number(double decimal);
+DataValue* data_decimal(double decimal);
 
 DataValue* data_string(char* string);
 
@@ -107,6 +107,17 @@ unsigned long int data_hash(char* s);
 void data_dict_set(DataValue* value, char* key, DataValue* item);
 
 DataValue* data_dict_get(DataValue* value, char* key);
+
+
+// Conversion Functions
+
+DataValue* data_to_boolean(DataValue* value);
+
+DataValue* data_to_integer(DataValue* value);
+
+DataValue* data_to_decimal(DataValue* value);
+
+DataValue* data_to_string(DataValue* value);
 
 
 // Data Helper Macros
@@ -142,10 +153,10 @@ DataValue* data_integer(int integer)
 }
 
 
-DataValue* data_number(double decimal)
+DataValue* data_decimal(double decimal)
 {
     DataValue* value = data_empty();
-    value->type = DATA_NUMBER;
+    value->type = DATA_DECIMAL;
     value->decimal = decimal;
     return value;
 }
@@ -185,13 +196,14 @@ DataValue* data_list(DataValue* head, ...)
     value->list->capacity = DATA_DEFAULT_LIST_CAPACITY;
     value->list->available = NULL;
 
+    if (head == NULL || head->type == DATA_EMPTY) return value;
+    data_list_append(value, head);
+
     va_list args;
     va_start(args, head);
-        if (head != NULL) data_list_append(value, head);
         while (true) {
             DataValue* item = va_arg(args, DataValue*);
             if (item == NULL) break;
-            if (item->type > DATA_DICT) continue;
             data_list_append(value, item);
         }
     va_end(args);
@@ -407,6 +419,93 @@ DataValue* data_dict_get(DataValue* value, char* key)
 
     return dict->entries[index]->value;
 }
+
+
+DataValue* data_to_boolean(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_BOOLEAN: return value;
+    case DATA_INTEGER: return data_boolean(value->integer);
+    case DATA_DECIMAL: return data_boolean(value->decimal);
+    case DATA_STRING: return data_boolean(strcmp(value->string, "true") == 0);
+    case DATA_TUPLE: return data_boolean(data_to_boolean(value->tuple->left)->boolean && data_to_boolean(value->tuple->right)->boolean);
+    case DATA_LIST: return data_boolean(value->list->count > 0);
+    case DATA_DICT: return data_boolean(value->list->count > 0);
+    default: return data_boolean(false);
+    }
+}
+
+
+DataValue* data_to_integer(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_BOOLEAN: return data_integer(value->boolean);
+    case DATA_INTEGER: return value;
+    case DATA_DECIMAL: return data_integer(value->decimal);
+    case DATA_STRING: return data_integer(atoi(value->string));
+    case DATA_TUPLE: return data_integer(data_to_integer(value->tuple->left)->integer + data_to_integer(value->tuple->right)->integer);
+    case DATA_LIST: return data_integer(value->list->count);
+    case DATA_DICT: return data_integer(value->dict->count);
+    default: return data_integer(0);
+    }
+}
+
+
+DataValue* data_to_decimal(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_BOOLEAN: return data_decimal(value->boolean);
+    case DATA_INTEGER: return data_decimal(value->integer);
+    case DATA_DECIMAL: return value;
+    case DATA_STRING: return data_decimal(atof(value->string));
+    case DATA_TUPLE: return data_decimal(data_to_decimal(value->tuple->left)->decimal + data_to_decimal(value->tuple->right)->decimal);
+    case DATA_LIST: return data_decimal(value->list->count);
+    case DATA_DICT: return data_decimal(value->dict->count);
+    default: return data_decimal(0);
+    }
+}
+
+
+DataValue* data_to_string(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_BOOLEAN: return data_string(value->boolean ? "true" : "false");
+    case DATA_INTEGER: return data_string(runtime_sprintf("%d", value->integer));
+    case DATA_DECIMAL: return data_string(runtime_sprintf("%f", value->decimal));
+    case DATA_STRING: return value;
+    case DATA_TUPLE: {
+        char* left = data_to_string(value->tuple->left)->string;
+        char* right = data_to_string(value->tuple->right)->string;
+        return data_string(runtime_sprintf("(%s, %s)", left, right));
+    }
+    case DATA_LIST: {
+        char buf[2048] = {0};
+        strcat(buf, "[");
+        for (int i = 0; i < value->list->count; i++) {
+            if (i > 0) strcat(buf, ", ");
+            strcat(buf, data_to_string(value->list->items[i])->string);
+        }
+        strcat(buf, "]");
+        return data_string(buf);
+    }
+    case DATA_DICT: {
+        int count = 0;
+        char buf[2048] = {0};
+        count += snprintf(buf, sizeof(buf), "{");
+        for (int i = 0; i < value->dict->capacity; i++) {
+            if (value->dict->entries[i] == NULL) continue;
+            char* key = value->dict->entries[i]->key;
+            char* str = data_to_string(value->dict->entries[i]->value)->string;
+            count += snprintf(buf + count, sizeof(buf) - count, "\"%s\": %s,", key, str);
+        }
+        if (count > 1) buf[count - 1] = '}';
+        else strcat(buf, "}");
+        return data_string(buf);
+    }
+    default: return data_string("null");
+    }
+}
+
 
 
 #endif // DATA_IMPLEMENTATION

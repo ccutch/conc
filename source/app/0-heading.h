@@ -21,14 +21,14 @@
     Runtime ----- Provides a cooperative runtime for our application for
                   managing memory and handling multiple processes at once.
 
-    DataTypes --- Provides a set of data types that are used to marshall and
-                  unmarshall data from the database, templates, and APIs.
-
     System ------ Provides low level integration with the os for system calls,
                   non-blocking file I/O, and environment variables.
 
     Network ----- Provides non-blocking tcp server, a basic HTTP interface, and
                   a path based router for handling incoming requests.
+
+    DataTypes --- Provides a set of data types that are used to marshall and
+                  unmarshall data from the database, templates, and APIs.
 
     Template ---- Provides a templating engine that will allow us to generate
                   HTML from our data structures, inspired by Go.
