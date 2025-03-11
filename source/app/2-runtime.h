@@ -33,6 +33,8 @@ int runtime_main(void);
 
 int runtime_id(void);
 
+MemoryArena* runtime_memory(void);
+
 void* runtime_alloc(int size);
 
 int runtime_unblock_fd(int);
@@ -94,6 +96,12 @@ int runtime_id(void)
 }
 
 
+MemoryArena* runtime_memory(void)
+{
+    return runtime_fibers.items[runtime_id()].memory;
+}
+
+
 void* runtime_alloc(int size)
 {
     // Lazily initialize the first fiber if we are allocating memory globally
@@ -115,6 +123,8 @@ void* runtime_alloc(int size)
     }
 
     // Allocate memory using the Memory feature
+    printf("runtime_alloc: %p\n", fiber->memory);
+    printf("runtime_alloc: %d\n", size);
     return memory_alloc(fiber->memory, size);
 }
 
@@ -337,7 +347,7 @@ void runtime_stop(void)
     }
 
     RuntimeFiber running_fiber = runtime_fibers.items[fiber_id];
-    memory_destroy(running_fiber.memory);
+    memory_empty(running_fiber.memory);
 
     memory_slice_append(NULL, &runtime_stopped_fibers, fiber_id);
     memory_slice_remove(&runtime_running_fibers, runtime_current_fiber);
@@ -350,15 +360,15 @@ void runtime_stop(void)
             exit(1);
         }
 
-        for (int i = 0; i < runtime_polls.count;) {
+        for (int i = 0; i < runtime_polls.count;)
             if (runtime_polls.items[i].revents) {
                 int ctx = runtime_waiting_fibers.items[i];
                 memory_slice_remove(&runtime_polls, i);
                 memory_slice_remove(&runtime_waiting_fibers, i);
                 memory_slice_append(NULL, &runtime_running_fibers, ctx);
-            } else { i++; }
-        }
+            } else i++;
     }
+    
 
     // Ensure we don't stop if there's at least one coroutine available
     if (runtime_running_fibers.count == 0 && runtime_waiting_fibers.count > 0) {

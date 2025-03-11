@@ -8,16 +8,16 @@
 
 
 #define MEMORY_IMPLEMENTATION
-#include "../source/1-memory.h"
+#include "../source/app/1-memory.h"
 
 #define RUNTIME_IMPLEMENTATION 
-#include "../source/2-runtime.h"
+#include "../source/app/2-runtime.h"
 
 #define SYSTEM_IMPLEMENTATION
-#include "../source/3-system.h"
+#include "../source/app/3-system.h"
 
 #define NETWORK_IMPLEMENTATION
-#include "../source/4-network.h"
+#include "../source/app/4-network.h"
 
 
 void trim_whitespace(char *buf)
@@ -38,7 +38,7 @@ void handler(int fd)
 {
     while (true) {
         char buf[1024] = {0};
-        int n = tcp_read_until(fd, buf, sizeof(buf) - 1, "\n");
+        int n = network_read_until(fd, buf, sizeof(buf) - 1, "\n");
         if (n <= 0) break;
 
         trim_whitespace(buf);
@@ -46,22 +46,23 @@ void handler(int fd)
         if (strcmp(buf, "read") == 0) {
             char file_buf[256] = {0};
             if ((n = system_read_file("testfile.txt", file_buf, 256)) > 0) {
-                tcp_write(fd, file_buf, n);
+                network_write(fd, file_buf, n);
                 continue;
             }
         }
 
         strcat(buf, "\n");
-        tcp_write(fd, buf, strlen(buf));
+        network_write(fd, buf, strlen(buf));
     }
 
     close(fd);
-    exit(EXIT_SUCCESS);
 }
 
 
 int main(void)
 {
-    runtime_run(tcp_listen(9090, handler));
-    return runtime_main();
+    runtime_run(network_listen_tcp(9090, handler));
+    int res =runtime_main();
+    printf("all done\n");
+    return res;
 }

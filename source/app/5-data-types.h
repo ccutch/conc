@@ -224,10 +224,10 @@ DataValue* data_dict(struct DataEntry* head, ...)
     value->dict->indexes = NULL;
 
     if (head == NULL) return value;
+    data_dict_set(value, head->key, head->value);
 
     va_list args;
     va_start(args, head);
-        data_dict_set(value, head->key, head->value);
         while (true) {
             struct DataEntry* item = va_arg(args, struct DataEntry*);
             if (item == NULL) break;
@@ -245,7 +245,9 @@ int data_list_prepend(DataValue* value, DataValue* item)
     struct DataList* list = value->list;
     if (list->count >= list->capacity) {
         list->capacity *= 2;
-        list->items = runtime_alloc(sizeof(DataValue*) * list->capacity);
+        DataValue** items = runtime_alloc(sizeof(DataValue**) * list->capacity);
+        for (int i = 0; i < list->count; i++) items[i] = list->items[i];
+        list->items = items;
     }
 
     if (list->items[0] != NULL)
@@ -266,16 +268,16 @@ int data_list_append(DataValue* value, DataValue* item)
     struct DataList* list = value->list;
     if (list->count >= list->capacity) {
         list->capacity *= 2;
-        list->items = runtime_alloc(sizeof(DataValue*) * list->capacity);
+        DataValue** items = runtime_alloc(sizeof(DataValue**) * list->capacity);
+        for (int i = 0; i < list->count; i++) items[i] = list->items[i];
+        list->items = items;
     }
 
     int index;
     if (list->available != NULL) {
         index = list->available->index;
         list->available = list->available->next;
-    } else {
-        index = list->count++;
-    }
+    } else index = list->count++;
 
     list->items[index] = item;
     return list->count - 1;
@@ -290,12 +292,11 @@ DataValue* data_list_remove(DataValue* value, int index)
     struct DataList* list = value->list;
     if (list == NULL) return data_empty();
 
-    list->available = runtime_alloc(sizeof(struct DataIndex));
-    list->available->index = index;
-    list->available->next = list->available;
-
     DataValue* item = list->items[index];
-    list->items[index] = NULL;
+    for (int i = index; i < list->count - 1; i++) {
+        list->items[i] = list->items[i + 1];
+    }
+
     list->count -= 1;
     return item;
 }
@@ -325,7 +326,6 @@ void data_print_list(DataValue* value)
     if (list == NULL) return;
 
     for (int i = 0; i < list->count; i++) {
-        printf("%d: ", i);
         if (list->items[i] == NULL) continue;
         printf("type: %d\n", list->items[i]->type);
         // if (list->items[i]->type == DATA_EMPTY) continue;
@@ -380,20 +380,25 @@ void data_dict_set(DataValue* value, char* key, DataValue* item)
 {
     if (value->type != DATA_DICT) return;
 
-    struct DataDict* dict = value->dict;
-    struct DataEntry* entry = data_entry(key, item);
 
-    unsigned long long int hash = entry->hash;
+    struct DataDict* dict = value->dict;
+    if (dict->count >= dict->capacity) {
+        dict->capacity *= 2;
+        struct DataEntry** entries = runtime_alloc(sizeof(struct DataEntry**) * dict->capacity);
+        for (int i = 0; i < dict->count; i++) entries[i] = dict->entries[i];
+        dict->entries = entries;
+    }
+
     struct DataIndex* index = runtime_alloc(sizeof(struct DataIndex));
+    struct DataEntry* entry = data_entry(key, item);
     index->next = dict->indexes;
-    index->index = hash % dict->capacity;
+    index->index = entry->hash % dict->capacity;
     while (dict->entries[index->index] != NULL) {
-        if (dict->entries[index->index]->hash == hash) {
+        if (dict->entries[index->index]->hash == entry->hash) {
             dict->entries[index->index]->value = item;
             return;
         }
-        index->index = (5 * index->index + hash + 1) % dict->capacity;
-        hash >>= 5;
+        index->index = (index->index + 1) % dict->capacity;
     }
 
     dict->entries[index->index] = entry;
@@ -413,8 +418,7 @@ DataValue* data_dict_get(DataValue* value, char* key)
     while (dict->entries[index] != NULL) {
         if (dict->entries[index]->hash == hash) 
             return dict->entries[index]->value;
-        index = (5 * index + hash + 1) % dict->capacity;
-        hash >>= 5;
+        index = (index + 1) % dict->capacity;
     }
 
     return dict->entries[index]->value;
@@ -439,8 +443,8 @@ DataValue* data_to_boolean(DataValue* value)
 DataValue* data_to_integer(DataValue* value)
 {
     switch (value->type) {
-    case DATA_BOOLEAN: return data_integer(value->boolean);
     case DATA_INTEGER: return value;
+    case DATA_BOOLEAN: return data_integer(value->boolean);
     case DATA_DECIMAL: return data_integer(value->decimal);
     case DATA_STRING: return data_integer(atoi(value->string));
     case DATA_TUPLE: return data_integer(data_to_integer(value->tuple->left)->integer + data_to_integer(value->tuple->right)->integer);
@@ -454,9 +458,9 @@ DataValue* data_to_integer(DataValue* value)
 DataValue* data_to_decimal(DataValue* value)
 {
     switch (value->type) {
+    case DATA_DECIMAL: return value;
     case DATA_BOOLEAN: return data_decimal(value->boolean);
     case DATA_INTEGER: return data_decimal(value->integer);
-    case DATA_DECIMAL: return value;
     case DATA_STRING: return data_decimal(atof(value->string));
     case DATA_TUPLE: return data_decimal(data_to_decimal(value->tuple->left)->decimal + data_to_decimal(value->tuple->right)->decimal);
     case DATA_LIST: return data_decimal(value->list->count);
@@ -469,15 +473,17 @@ DataValue* data_to_decimal(DataValue* value)
 DataValue* data_to_string(DataValue* value)
 {
     switch (value->type) {
+    case DATA_STRING: return value;
     case DATA_BOOLEAN: return data_string(value->boolean ? "true" : "false");
     case DATA_INTEGER: return data_string(runtime_sprintf("%d", value->integer));
     case DATA_DECIMAL: return data_string(runtime_sprintf("%f", value->decimal));
-    case DATA_STRING: return value;
+
     case DATA_TUPLE: {
         char* left = data_to_string(value->tuple->left)->string;
         char* right = data_to_string(value->tuple->right)->string;
         return data_string(runtime_sprintf("(%s, %s)", left, right));
     }
+
     case DATA_LIST: {
         char buf[2048] = {0};
         strcat(buf, "[");
@@ -488,6 +494,7 @@ DataValue* data_to_string(DataValue* value)
         strcat(buf, "]");
         return data_string(buf);
     }
+
     case DATA_DICT: {
         int count = 0;
         char buf[2048] = {0};
@@ -502,10 +509,10 @@ DataValue* data_to_string(DataValue* value)
         else strcat(buf, "}");
         return data_string(buf);
     }
-    default: return data_string("null");
+
+    default: return data_string("");
     }
 }
-
 
 
 #endif // DATA_IMPLEMENTATION

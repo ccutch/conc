@@ -18,11 +18,6 @@
 
 
 // Record for tracking allocated blocks of memory
-typedef struct MemoryBlock {
-    struct MemoryBlock* next;
-    char* ptr;
-    int size;
-} MemoryBlock;
 
 // Based on tsoding's Arena Memory Allocator
 //    https://github.com/tsoding/arena
@@ -30,7 +25,11 @@ typedef struct MemoryArena {
     struct MemoryArena* next;
     int capacity;
     int count;
-    MemoryBlock *blocks;
+    struct MemoryBlock {
+        struct MemoryBlock* next;
+        char* ptr;
+        int size;
+    } *blocks;
     char memory[];
 } MemoryArena;
 
@@ -56,35 +55,35 @@ void memory_destroy(MemoryArena* arena);
 #define MEMORY_DEFUALT_ARENA_SIZE getpagesize()
 #define MEMORY_DEFAULT_SLICE_SIZE 100
 
-// Macro for dynamically sized arrays
-#define MEMORY_SLICE(name, type) \
-    struct name {                \
-        int capacity;            \
-        int count;               \
-        type* items;             \
+// Macro for dynamically sized slices of memory
+#define MEMORY_SLICE(name, type)                                              \
+    struct name {                                                             \
+        int capacity;                                                         \
+        int count;                                                            \
+        type* items;                                                          \
     }
 
 // Append a new item to the end of the slice
-#define memory_slice_append(arena, slice, item) ({         \
-    if ((slice)->count >= (slice)->capacity) {             \
-        (slice)->capacity += MEMORY_DEFAULT_SLICE_SIZE;    \
-        int size = (slice)->capacity * sizeof(item);       \
-        (slice)->items = realloc((slice)->items, size);    \
-        if ((slice)->items == NULL) {                      \
-            perror("[ERROR] Failed to allocate memory\n"); \
-            exit(1);                                       \
-        }                                                  \
-    }                                                      \
-    (slice)->items[(slice)->count++] = (item);             \
+#define memory_slice_append(arena, slice, item) ({                            \
+    if ((slice)->count >= (slice)->capacity) {                                \
+        (slice)->capacity += MEMORY_DEFAULT_SLICE_SIZE;                       \
+        int size = (slice)->capacity * sizeof(item);                          \
+        (slice)->items = realloc((slice)->items, size);                       \
+        if ((slice)->items == NULL) {                                         \
+            perror("[ERROR] Failed to allocate memory\n");                    \
+            exit(1);                                                          \
+        }                                                                     \
+    }                                                                         \
+    (slice)->items[(slice)->count++] = (item);                                \
 })
 
 // Remove an item from slice, and replace with last item
-#define memory_slice_remove(slice, index) ({                  \
-    if ((index) >= (slice)->count) {                          \
-        perror("[ERROR] Index out of bounds\n");              \
-        exit(1);                                              \
-    }                                                         \
-    (slice)->items[index] = (slice)->items[--(slice)->count]; \
+#define memory_slice_remove(slice, index) ({                                  \
+    if ((index) >= (slice)->count) {                                          \
+        perror("[ERROR] Index out of bounds\n");                              \
+        exit(1);                                                              \
+    }                                                                         \
+    (slice)->items[index] = (slice)->items[--(slice)->count];                 \
 })
 
 
@@ -98,10 +97,10 @@ void memory_destroy(MemoryArena* arena);
 MemoryArena* memory_arena(int capacity)
 {
     MemoryArena* arena = mmap(NULL, sizeof(MemoryArena) + sizeof(char) * capacity,
-                              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+                              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,
+                              0, 0);
     arena->count = 0;
     arena->capacity = capacity;
-    memset(arena->memory, 0, capacity);
     arena->blocks = NULL;
     return arena;
 }
@@ -109,8 +108,10 @@ MemoryArena* memory_arena(int capacity)
 
 int memory_block_count(MemoryArena* arena)
 {
+    if (arena == NULL) return 0;
+    struct MemoryBlock* block;
     int count = 0;
-    for (MemoryBlock* alloc = arena->blocks; alloc != NULL; alloc = alloc->next)
+    for (block = arena->blocks; block != NULL; block = block->next)
         count++;
     return count;
 }
@@ -122,11 +123,12 @@ void* memory_alloc(MemoryArena* arena, int size)
     if (arena == NULL) return malloc(size);
 
     // Search arena for available memory
-    while (arena->count + size > arena->capacity && arena->next != NULL)
+    while (arena->count + size > arena->capacity && arena->next != NULL) {
         arena = arena->next;
+    }
     
     // Allocate memory if none was found
-    if (arena->count + size > arena->capacity) {
+    if (arena->count + size >= arena->capacity) {
 
         // Allocating the right capacity
         int capacity = (arena->capacity > size) ? arena->capacity : size;
@@ -137,13 +139,17 @@ void* memory_alloc(MemoryArena* arena, int size)
     }
 
     // Recording allocation to the stack
-    MemoryBlock* alloc = malloc(sizeof(MemoryBlock));
-    alloc->ptr = &arena->memory[arena->count];
-    alloc->size = size;
-    alloc->next = arena->blocks;
+    struct MemoryBlock* block = malloc(sizeof(struct MemoryBlock));
+    if (block == NULL) {
+        perror("[ERROR] Failed to allocate memory\n");
+        return NULL;
+    }
+    block->ptr = &arena->memory[arena->count];
+    block->size = size;
+    block->next = arena->blocks;
     arena->count += size;
-    arena->blocks = alloc;
-    return alloc->ptr;
+    arena->blocks = block;
+    return block->ptr;
 }
 
 
@@ -151,13 +157,13 @@ void* memory_realloc(MemoryArena* arena, void* ptr, int size)
 {
     if (arena == NULL) return realloc(ptr, size);
 
-    MemoryBlock *alloc = arena->blocks;
-    while (alloc != NULL && alloc->ptr != ptr)
-        alloc = alloc->next;
+    struct MemoryBlock *block = arena->blocks;
+    while (block != NULL && block->ptr != ptr)
+        block = block->next;
 
-    if (alloc == NULL) return NULL;
-    if (alloc->size == size) return ptr;
-    if (alloc->size > size) return ptr;
+    if (block == NULL) return NULL;
+    if (block->size == size) return ptr;
+    if (block->size > size) return ptr;
 
     void* new = memory_alloc(arena, size);
     if (new == NULL) return NULL;
@@ -165,7 +171,7 @@ void* memory_realloc(MemoryArena* arena, void* ptr, int size)
     char* source = (char*)ptr;
     char* sink = (char*)new;
 
-    for (int i = 0; i < alloc->size; i++)
+    for (int i = 0; i < block->size; i++)
         sink[i] = source[i];
 
     return new;
@@ -179,18 +185,16 @@ void memory_empty(MemoryArena* arena)
     // Smash the Bureaucracy
     while (arena->blocks != NULL) {
 
-        MemoryBlock* alloc = arena->blocks;
-        arena->blocks = alloc->next;
-        free(alloc);
+        struct MemoryBlock* block = arena->blocks;
+        arena->blocks = block->next;
+        free(block);
 
     }
 
     // Destroy the Bloodline
-    MemoryArena* child = arena->next;
-    while (child != NULL) {
+    while (arena->next != NULL) {
 
-        child = child->next;
-        memory_destroy(child);
+        memory_destroy(arena->next);
 
     }
 
@@ -209,18 +213,16 @@ void memory_destroy(MemoryArena* arena)
     // Smash the Bureaucracy
     while (arena->blocks != NULL) {
 
-        MemoryBlock* alloc = arena->blocks;
-        arena->blocks = alloc->next;
-        free(alloc);
+        struct MemoryBlock* block = arena->blocks;
+        arena->blocks = block->next;
+        free(block);
 
     }
 
     // Destroy the Bloodline
-    MemoryArena* child = arena->next;
-    while (child != NULL) {
+    if (arena->next != NULL) {
 
-        child = child->next;
-        memory_destroy(child);
+        memory_destroy(arena->next);
 
     }
 

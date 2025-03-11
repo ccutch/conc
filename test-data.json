@@ -1,0 +1,9 @@
+{
+    "empty": null,
+    "boolean": true,
+    "integer": 42,
+    "decimal": 3.14,
+    "string": "foobar",
+    "list": ["hello", "world"],
+    "dict": {"foo": "bar"}
+}

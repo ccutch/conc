@@ -21,28 +21,31 @@
     Runtime ----- Provides a cooperative runtime for our application for
                   managing memory and handling multiple processes at once.
 
-    DataTypes --- Provides a set of data types that are used to marshall and
-                  unmarshall data from the database, templates, and APIs.
-
     System ------ Provides low level integration with the os for system calls,
                   non-blocking file I/O, and environment variables.
 
     Network ----- Provides non-blocking tcp server, a basic HTTP interface, and
                   a path based router for handling incoming requests.
 
-    Database ---- Provides a wrapper around the sqlite3 library to store data in
-                  a unstructured way with documents-based storage.
+    DataTypes --- Provides a set of data types that are used to marshall and
+                  unmarshall data from the database, templates, and APIs.
+
+    Encoding ---- Provides a set of functions for encoding and decoding data
+                  from popular encoding formats like JSON.
 
     Template ---- Provides a templating engine that will allow us to generate
                   HTML from our data structures, inspired by Go.
+
+    Database ---- Provides a wrapper around the sqlite3 library to store data in
+                  a unstructured way with documents-based storage.
            
     Application - Provides a high level interface for starting our application,
                   binding data, serving files and folders.
 
 
     @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
-    @date:    2025-03-01
-    @version  0.1.0
+    @date:    2025-03-08
+    @version  0.1.1
     @license: MIT
 */
 
@@ -83,8 +86,8 @@
 /** memory.h - Provides a region based memory system for storing data.
 
     @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
-    @date:    2025-03-01
-    @version  0.1.0 
+    @date:    2025-03-08
+    @version  0.1.1 
     @license: MIT
 */
 
@@ -100,11 +103,6 @@
 
 
 // Record for tracking allocated blocks of memory
-typedef struct MemoryBlock {
-    struct MemoryBlock* next;
-    char* ptr;
-    int size;
-} MemoryBlock;
 
 // Based on tsoding's Arena Memory Allocator
 //    https://github.com/tsoding/arena
@@ -112,7 +110,11 @@ typedef struct MemoryArena {
     struct MemoryArena* next;
     int capacity;
     int count;
-    MemoryBlock *blocks;
+    struct MemoryBlock {
+        struct MemoryBlock* next;
+        char* ptr;
+        int size;
+    } *blocks;
     char memory[];
 } MemoryArena;
 
@@ -138,35 +140,35 @@ void memory_destroy(MemoryArena* arena);
 #define MEMORY_DEFUALT_ARENA_SIZE getpagesize()
 #define MEMORY_DEFAULT_SLICE_SIZE 100
 
-// Macro for dynamically sized arrays
-#define MEMORY_SLICE(name, type) \
-    struct name {                \
-        int capacity;            \
-        int count;               \
-        type* items;             \
+// Macro for dynamically sized slices of memory
+#define MEMORY_SLICE(name, type)                                              \
+    struct name {                                                             \
+        int capacity;                                                         \
+        int count;                                                            \
+        type* items;                                                          \
     }
 
 // Append a new item to the end of the slice
-#define memory_slice_append(arena, slice, item) ({         \
-    if ((slice)->count >= (slice)->capacity) {             \
-        (slice)->capacity += MEMORY_DEFAULT_SLICE_SIZE;    \
-        int size = (slice)->capacity * sizeof(item);       \
-        (slice)->items = realloc((slice)->items, size);    \
-        if ((slice)->items == NULL) {                      \
-            perror("[ERROR] Failed to allocate memory\n"); \
-            exit(1);                                       \
-        }                                                  \
-    }                                                      \
-    (slice)->items[(slice)->count++] = (item);             \
+#define memory_slice_append(arena, slice, item) ({                            \
+    if ((slice)->count >= (slice)->capacity) {                                \
+        (slice)->capacity += MEMORY_DEFAULT_SLICE_SIZE;                       \
+        int size = (slice)->capacity * sizeof(item);                          \
+        (slice)->items = realloc((slice)->items, size);                       \
+        if ((slice)->items == NULL) {                                         \
+            perror("[ERROR] Failed to allocate memory\n");                    \
+            exit(1);                                                          \
+        }                                                                     \
+    }                                                                         \
+    (slice)->items[(slice)->count++] = (item);                                \
 })
 
 // Remove an item from slice, and replace with last item
-#define memory_slice_remove(slice, index) ({                  \
-    if ((index) >= (slice)->count) {                          \
-        perror("[ERROR] Index out of bounds\n");              \
-        exit(1);                                              \
-    }                                                         \
-    (slice)->items[index] = (slice)->items[--(slice)->count]; \
+#define memory_slice_remove(slice, index) ({                                  \
+    if ((index) >= (slice)->count) {                                          \
+        perror("[ERROR] Index out of bounds\n");                              \
+        exit(1);                                                              \
+    }                                                                         \
+    (slice)->items[index] = (slice)->items[--(slice)->count];                 \
 })
 
 
@@ -180,10 +182,10 @@ void memory_destroy(MemoryArena* arena);
 MemoryArena* memory_arena(int capacity)
 {
     MemoryArena* arena = mmap(NULL, sizeof(MemoryArena) + sizeof(char) * capacity,
-                              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+                              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE,
+                              0, 0);
     arena->count = 0;
     arena->capacity = capacity;
-    memset(arena->memory, 0, capacity);
     arena->blocks = NULL;
     return arena;
 }
@@ -191,8 +193,10 @@ MemoryArena* memory_arena(int capacity)
 
 int memory_block_count(MemoryArena* arena)
 {
+    if (arena == NULL) return 0;
+    struct MemoryBlock* block;
     int count = 0;
-    for (MemoryBlock* alloc = arena->blocks; alloc != NULL; alloc = alloc->next)
+    for (block = arena->blocks; block != NULL; block = block->next)
         count++;
     return count;
 }
@@ -200,15 +204,22 @@ int memory_block_count(MemoryArena* arena)
 
 void* memory_alloc(MemoryArena* arena, int size)
 {
+    printf("memory_alloc: %d\n", size);
     // Sensible default to malloc memory
     if (arena == NULL) return malloc(size);
 
+    printf("memory_alloc: searching for memory\n");
+    printf("arena->count: %d\n", arena->count);
+    printf("arena->capacity: %d\n", arena->capacity);
     // Search arena for available memory
-    while (arena->count + size > arena->capacity && arena->next != NULL)
+    while (arena->count + size > arena->capacity && arena->next != NULL) {
+        printf("arena->next %p\n", arena->next);
         arena = arena->next;
+    }
     
+    printf("memory_alloc: searching for memory: found\n");
     // Allocate memory if none was found
-    if (arena->count + size > arena->capacity) {
+    if (arena->count + size >= arena->capacity) {
 
         // Allocating the right capacity
         int capacity = (arena->capacity > size) ? arena->capacity : size;
@@ -218,14 +229,24 @@ void* memory_alloc(MemoryArena* arena, int size)
 
     }
 
+    printf("memory_alloc: allocating memory\n");
     // Recording allocation to the stack
-    MemoryBlock* alloc = malloc(sizeof(MemoryBlock));
-    alloc->ptr = &arena->memory[arena->count];
-    alloc->size = size;
-    alloc->next = arena->blocks;
+    struct MemoryBlock* block = malloc(sizeof(struct MemoryBlock));
+    if (block == NULL) {
+        perror("[ERROR] Failed to allocate memory\n");
+        return NULL;
+    }
+    block->ptr = &arena->memory[arena->count];
+    printf("pointer assigned: %p\n", block->ptr);
+    block->size = size;
+    printf("size assigned: %d\n", block->size);
+    block->next = arena->blocks;
+    printf("next assigned: %p\n", block->next); 
     arena->count += size;
-    arena->blocks = alloc;
-    return alloc->ptr;
+    printf("arena->blocks assigned: %p\n", arena->blocks);
+    arena->blocks = block;
+    printf("arena->blocks assigned: %p\n", arena->blocks);  
+    return block->ptr;
 }
 
 
@@ -233,13 +254,13 @@ void* memory_realloc(MemoryArena* arena, void* ptr, int size)
 {
     if (arena == NULL) return realloc(ptr, size);
 
-    MemoryBlock *alloc = arena->blocks;
-    while (alloc != NULL && alloc->ptr != ptr)
-        alloc = alloc->next;
+    struct MemoryBlock *block = arena->blocks;
+    while (block != NULL && block->ptr != ptr)
+        block = block->next;
 
-    if (alloc == NULL) return NULL;
-    if (alloc->size == size) return ptr;
-    if (alloc->size > size) return ptr;
+    if (block == NULL) return NULL;
+    if (block->size == size) return ptr;
+    if (block->size > size) return ptr;
 
     void* new = memory_alloc(arena, size);
     if (new == NULL) return NULL;
@@ -247,7 +268,7 @@ void* memory_realloc(MemoryArena* arena, void* ptr, int size)
     char* source = (char*)ptr;
     char* sink = (char*)new;
 
-    for (int i = 0; i < alloc->size; i++)
+    for (int i = 0; i < block->size; i++)
         sink[i] = source[i];
 
     return new;
@@ -261,18 +282,16 @@ void memory_empty(MemoryArena* arena)
     // Smash the Bureaucracy
     while (arena->blocks != NULL) {
 
-        MemoryBlock* alloc = arena->blocks;
-        arena->blocks = alloc->next;
-        free(alloc);
+        struct MemoryBlock* block = arena->blocks;
+        arena->blocks = block->next;
+        free(block);
 
     }
 
     // Destroy the Bloodline
-    MemoryArena* child = arena->next;
-    while (child != NULL) {
+    while (arena->next != NULL) {
 
-        child = child->next;
-        memory_destroy(child);
+        memory_destroy(arena->next);
 
     }
 
@@ -291,18 +310,16 @@ void memory_destroy(MemoryArena* arena)
     // Smash the Bureaucracy
     while (arena->blocks != NULL) {
 
-        MemoryBlock* alloc = arena->blocks;
-        arena->blocks = alloc->next;
-        free(alloc);
+        struct MemoryBlock* block = arena->blocks;
+        arena->blocks = block->next;
+        free(block);
 
     }
 
     // Destroy the Bloodline
-    MemoryArena* child = arena->next;
-    while (child != NULL) {
+    if (arena->next != NULL) {
 
-        child = child->next;
-        memory_destroy(child);
+        memory_destroy(arena->next);
 
     }
 
@@ -317,8 +334,8 @@ void memory_destroy(MemoryArena* arena)
 /** runtime.h - Provides a cooperative runtime for our application.
 
     @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
-    @date:    2025-03-03
-    @version  0.1.0 
+    @date:    2025-03-08
+    @version  0.1.1 
     @license: MIT  
 */
 
@@ -348,6 +365,8 @@ typedef struct RuntimeFiber {
 int runtime_main(void);
 
 int runtime_id(void);
+
+MemoryArena* runtime_memory(void);
 
 void* runtime_alloc(int size);
 
@@ -410,6 +429,12 @@ int runtime_id(void)
 }
 
 
+MemoryArena* runtime_memory(void)
+{
+    return runtime_fibers.items[runtime_id()].memory;
+}
+
+
 void* runtime_alloc(int size)
 {
     // Lazily initialize the first fiber if we are allocating memory globally
@@ -431,6 +456,8 @@ void* runtime_alloc(int size)
     }
 
     // Allocate memory using the Memory feature
+    printf("runtime_alloc: %p\n", fiber->memory);
+    printf("runtime_alloc: %d\n", size);
     return memory_alloc(fiber->memory, size);
 }
 
@@ -666,15 +693,15 @@ void runtime_stop(void)
             exit(1);
         }
 
-        for (int i = 0; i < runtime_polls.count;) {
+        for (int i = 0; i < runtime_polls.count;)
             if (runtime_polls.items[i].revents) {
                 int ctx = runtime_waiting_fibers.items[i];
                 memory_slice_remove(&runtime_polls, i);
                 memory_slice_remove(&runtime_waiting_fibers, i);
                 memory_slice_append(NULL, &runtime_running_fibers, ctx);
-            } else { i++; }
-        }
+            } else i++;
     }
+    
 
     // Ensure we don't stop if there's at least one coroutine available
     if (runtime_running_fibers.count == 0 && runtime_waiting_fibers.count > 0) {
@@ -739,11 +766,573 @@ void runtime_logf(char *fmt, ...)
 
 #endif // RUNTIME_IMPLEMENTATION
 #endif // RUNTIME_HEADER
+
+/** system.h - Provides low level integration with the os for system calls,
+              non-blocking file I/O, and environment variables.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-08
+    @version  0.1.1
+    @license: MIT
+*/
+
+
+#ifndef SYSTEM_HEADER
+#define SYSTEM_HEADER
+
+
+#include <stdbool.h>
+
+
+// Process keeps pointers to a forked process
+typedef struct SystemProcess {
+    int pid;
+    int stdout;
+    int stderr;
+} SystemProcess;
+
+
+// System Process Functions
+
+SystemProcess* system_exec(char* command);
+
+int system_join(SystemProcess* process);
+
+int system_kill(SystemProcess* process);
+
+int system_stdout(SystemProcess* process, char* buffer, int size);
+
+int system_stderr(SystemProcess* process, char* buffer, int size);
+
+
+// System Environment Functions
+
+char* system_getenv(char* name, char* def_value);
+
+
+// Non-blocking I/O Functions
+
+bool system_file_exists(char* path);
+
+bool system_make_dir(char* path);
+
+bool system_remove_dir(char* path);
+
+bool system_remove_file(char* path);
+
+int system_read_file(char* path, char* buffer, int size);
+
+int system_write_file(char* path, char* buffer, int size);
+
+
+#ifdef SYSTEM_IMPLEMENTATION
+
+
+#include <strings.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+
+
+SystemProcess* system_exec(char* command)
+{
+    int sysout[2];
+    if (pipe(sysout) < 0) return NULL;
+
+    int syserr[2];
+    if (pipe(syserr) < 0) {
+        close(sysout[0]);
+        close(sysout[1]);
+        return NULL;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(sysout[0]);
+        close(sysout[1]);
+        close(syserr[0]);
+        close(syserr[1]);
+        return NULL;
+    }
+
+    if (pid == 0) {
+        close(sysout[0]);
+        close(syserr[0]);
+
+        dup2(sysout[1], STDOUT_FILENO);
+        dup2(syserr[1], STDERR_FILENO);
+
+        close(sysout[1]);
+        close(syserr[1]);
+
+        execlp("sh", "sh", "-c", command, NULL);
+        exit(1);
+    }
+
+    close(sysout[1]);
+    close(syserr[1]);
+    SystemProcess* process = runtime_alloc(sizeof(SystemProcess));
+    process->pid = pid;
+    process->stdout = sysout[0];
+    process->stderr = syserr[0];
+    return process;
+}
+
+
+int system_join(SystemProcess* process)
+{
+    int status;
+    waitpid(process->pid, &status, 0);
+    if (process->stdout > 0) close(process->stdout);
+    if (process->stderr > 0) close(process->stderr);
+    return status;
+}
+
+
+int system_kill(SystemProcess* process)
+{
+    if (kill(process->pid, SIGKILL) < 0) return -1;
+    return system_join(process);
+}
+
+
+int system_stdout(SystemProcess* process, char* buffer, int size)
+{
+    int total_read = 0;
+    while (total_read < size - 1) {
+        int n = read(process->stdout, buffer + total_read, size - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(process->stdout);
+                continue;
+            }
+            close(process->stdout);
+            process->stdout = -1;
+            return -1;
+        } else if (n == 0) break;
+
+        total_read += n;
+    }
+
+    close(process->stdout);
+    process->stdout = -1;
+    return total_read;
+}
+
+
+int system_stderr(SystemProcess* process, char* buffer, int size)
+{
+    int total_read = 0;
+    while (total_read < size - 1) {
+        int n = read(process->stderr, buffer + total_read, size - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(process->stderr);
+                continue;
+            }
+            close(process->stderr);
+            process->stderr = -1;
+            return -1;
+        } else if (n == 0) break;
+
+        total_read += n;
+    }
+
+    close(process->stderr);
+    process->stderr = -1;
+    return total_read;
+}
+
+
+char* system_getenv(char* name, char* def_value)
+{
+    char* value = getenv(name);
+    return value ? value : def_value;
+}
+
+
+bool system_file_exists(char* path)
+{
+    struct stat statbuf;
+    if (stat(path, &statbuf) < 0) {
+        if (errno == ENOENT) return false;
+        return false;
+    }
+    return true;
+}
+
+
+bool system_remove_file(char* path)
+{
+    return remove(path) < 0;
+}
+
+
+bool system_make_dir(char* path)
+{
+    return mkdir(path, 0755) < 0;
+}
+
+
+bool system_remove_dir(char* path)
+{
+    return rmdir(path) < 0;
+}
+
+
+int system_read_file(char* path, char* buffer, int size)
+{
+    int fd = open(path, O_NONBLOCK | O_RDONLY);
+    if (fd < 0) return -1;
+
+    int total_read = 0;
+    while (total_read < size - 1) {
+        int n = read(fd, buffer + total_read, size - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(fd);
+                continue;
+            }
+            close(fd);
+            return -1;
+        } else if (n == 0) break;
+
+        total_read += n;
+    }
+
+    close(fd);
+    return total_read;
+}
+
+
+int system_write_file(char* path, char* buffer, int size)
+{
+    int fd = open(path, O_NONBLOCK | O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return -1;
+
+    int total_written = 0;
+    while (total_written < size) {
+        int n = write(fd, buffer + total_written, size - total_written);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_write(fd);
+                continue;
+            }
+            close(fd);
+            return -1;
+        }
+
+        total_written += n;
+    }
+    close(fd);
+    return total_written;
+}
+
+
+#endif // SYSTEM_IMPLEMENTATION
+#endif // SYSTEM_HEADER
+
+/** network.h - Provides a non-blocking TCP server, a basic HTTP interface,
+    and a path-based router for handling incoming requests.
+
+    Revised to correctly accept HTTP requests.
+    @author:
+    @date:    2025-03-08
+    @version  0.1.2
+    @license: MIT
+*/
+
+
+#ifndef NETWORK_HEADER
+#define NETWORK_HEADER
+
+typedef struct NetworkHeader {
+    struct NetworkHeader* next;
+    char *key;
+    char *value;
+} NetworkHeader;
+
+typedef struct NetworkRequest {
+    int conn_fd;
+    char *method;
+    char *path;
+    NetworkHeader *req_headers;
+    NetworkHeader *res_headers;
+    int content_length;
+    int res_status;
+} NetworkRequest;
+
+void network_listen(int port, void (*handler)(NetworkRequest*));
+
+int network_read_until(int fd, char *buf, int len, const char *delim);
+
+int network_write(int fd, const char *buf, int len);
+
+// or NULL if the request is malformed.
+NetworkRequest* network_parse_http(int fd);
+
+// Returns a header value from the incoming request headers.
+char *network_get_header(NetworkRequest *req, const char *header);
+
+// Sets a header in the response headers.
+void network_set_header(NetworkRequest *req, const char *header, const char *value);
+
+// Writes the HTTP response head to the connection. Once written, headers can no longer be modified.
+int network_write_head(NetworkRequest *req, int status, const char *message);
+
+// Writes a response body to the connection. If the head has not yet been written,
+// this function writes a default 200 OK response head.
+int network_write_body(NetworkRequest *req, const char *body, int len);
+
+
+#ifdef NETWORK_IMPLEMENTATION
+
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
+
+void network_listen(int port, void (*handler)(NetworkRequest*))
+{
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        runtime_logf("failed to create socket on port %d", port);
+        return;
+    }
+
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = INADDR_ANY,
+        .sin_port = htons(port),
+    };
+
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        runtime_logf("failed to bind socket on port %d", port);
+        close(server_fd);
+        return;
+    }
+
+    if (listen(server_fd, SOMAXCONN) < 0) {
+        runtime_logf("failed to listen on socket on port %d", port);
+        close(server_fd);
+        return;
+    }
+
+    runtime_unblock_fd(server_fd);
+    printf("Listening on port %d\n", port);
+    while (true) {
+        socklen_t addr_size = sizeof(addr);
+        int conn_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_size);
+        if (conn_fd < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(server_fd);
+                continue;
+            }
+            runtime_logf("failed to accept connection on port %d", port);
+            return;
+        }
+        runtime_unblock_fd(conn_fd);
+        NetworkRequest *req = network_parse_http(conn_fd);
+        if (req == NULL) {
+            close(conn_fd);
+            continue;
+        }
+        runtime_start((void*)handler, (void*)req);
+    }
+}
+
+
+int network_read_until(int fd, char *buf, int size, const char *delim)
+{
+    int total_read = 0;
+    int delim_len = strlen(delim);
+
+    while (total_read < size - 1) {
+        int n = read(fd, buf + total_read, size - 1 - total_read);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_read(fd);
+                continue;
+            }
+            runtime_logf("failed to read from fd %d", fd);
+            return -1;
+        } else if (n == 0) {
+            break;
+        }
+        total_read += n;
+        buf[total_read] = '\0';
+        if (total_read >= delim_len && strstr(buf, delim) != NULL)
+            break;
+    }
+    buf[total_read] = '\0';
+    return total_read;
+}
+
+
+int network_write(int fd, const char *buf, int size)
+{
+    int total_written = 0;
+    while (total_written < size) {
+        int n = write(fd, buf + total_written, size - total_written);
+        if (n < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                runtime_write(fd);
+                continue;
+            }
+            runtime_logf("failed to write to fd %d", fd);
+            return -1;
+        }
+        total_written += n;
+    }
+    return total_written;
+}
+
+
+static char* str_dup(const char *s) {
+    if (!s) return NULL;
+    size_t len = strlen(s);
+    char *copy = runtime_alloc(len + 1);
+    memcpy(copy, s, len + 1);
+    return copy;
+}
+
+
+NetworkRequest* network_parse_http(int fd)
+{
+    char buf[2048] = {0};
+    // Read until the end of the header block.
+    int n = network_read_until(fd, buf, sizeof(buf) - 1, "\r\n\r\n");
+    if (n <= 0) return NULL;
+
+    char *line_save;
+    char *line = strtok_r(buf, "\r\n", &line_save);
+    if (!line) return NULL;
+
+    char *req_save;
+    char *method = strtok_r(line, " ", &req_save);
+    char *path   = strtok_r(NULL, " ", &req_save);
+    if (!method || !path) return NULL;
+
+    NetworkRequest *req = runtime_alloc(sizeof(NetworkRequest));
+    req->conn_fd = fd;
+    req->method = str_dup(method);
+    req->path   = str_dup(path);
+    req->req_headers = NULL;
+    req->res_headers = NULL;
+    req->content_length = 0;
+    req->res_status = 0;
+
+    while ((line = strtok_r(NULL, "\r\n", &line_save)) != NULL) {
+        if (strlen(line) == 0) break;
+
+        char *colon = strchr(line, ':');
+        if (!colon) continue;
+        *colon = '\0';
+        char *key = line;
+        char *value = colon + 1;
+        while (*value == ' ') value++;
+
+        NetworkHeader *header = runtime_alloc(sizeof(NetworkHeader));
+        header->key = str_dup(key);
+        header->value = str_dup(value);
+        header->next = req->req_headers;
+        req->req_headers = header;
+
+        if (strcasecmp(header->key, "Content-Length") == 0)
+            req->content_length = atoi(header->value);
+    }
+
+    return req;
+}
+
+
+char *network_get_header(NetworkRequest *req, const char *header)
+{
+    NetworkHeader *h = req->req_headers;
+    while (h != NULL) {
+        if (strcasecmp(h->key, header) == 0) return h->value;
+        h = h->next;
+    }
+    return NULL;
+}
+
+
+void network_set_header(NetworkRequest *req, const char *header, const char *value)
+{
+    NetworkHeader *h = req->res_headers;
+    while (h != NULL) {
+        if (strcasecmp(h->key, header) == 0) {
+            h->value = str_dup(value);
+            return;
+        }
+        h = h->next;
+    }
+
+    NetworkHeader *new_header = runtime_alloc(sizeof(NetworkHeader));
+    new_header->key = str_dup(header);
+    new_header->value = str_dup(value);
+    new_header->next = req->res_headers;
+    req->res_headers = new_header;
+}
+
+
+int network_write_head(NetworkRequest *req, int status, const char *message)
+{
+    if (req->res_status != 0) return -1;
+    req->res_status = status;
+
+    int total_written = 0;
+    char *status_line = runtime_sprintf("HTTP/1.0 %d %s\r\n", status, message);
+    total_written += network_write(req->conn_fd, status_line, strlen(status_line));
+
+    NetworkHeader *h = req->res_headers;
+    while (h != NULL) {
+        char *header_line = runtime_sprintf("%s: %s\r\n", h->key, h->value);
+        total_written += network_write(req->conn_fd, header_line, strlen(header_line));
+        h = h->next;
+    }
+
+    total_written += network_write(req->conn_fd, "\r\n", 2);
+    return total_written;
+}
+
+
+int network_write_body(NetworkRequest *req, const char *body, int len)
+{
+    int total_written = 0;
+    if (req->res_status == 0) {
+        char length_str[16];
+        snprintf(length_str, sizeof(length_str), "%d", len);
+        network_set_header(req, "Content-Length", length_str);
+        total_written = network_write_head(req, 200, "OK");
+        if (total_written < 0) return -1;
+    }
+
+
+    total_written += network_write(req->conn_fd, body, len);
+    close(req->conn_fd);
+    req->conn_fd = -1;
+
+    return total_written;
+}
+
+#endif // NETWORK_IMPLEMENTATION
+#endif // NETWORK_HEADER
+
 /** data.h - Dynamic data types for our application.
 
     @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
-    @date:    2025-03-03
-    @version  0.1.0 
+    @date:    2025-03-08
+    @version  0.1.1 
     @license: MIT
 */
 
@@ -765,7 +1354,7 @@ typedef struct DataValue {
         DATA_EMPTY,
         DATA_BOOLEAN,
         DATA_INTEGER,
-        DATA_NUMBER,
+        DATA_DECIMAL,
         DATA_STRING,
         DATA_TUPLE,
         DATA_LIST,
@@ -817,7 +1406,7 @@ DataValue* data_boolean(bool boolean);
 
 DataValue* data_integer(int integer);
 
-DataValue* data_number(double decimal);
+DataValue* data_decimal(double decimal);
 
 DataValue* data_string(char* string);
 
@@ -830,9 +1419,9 @@ DataValue* data_dict(struct DataEntry* head, ...);
 
 // Data List Functions
 
-int data_list_prepend(DataValue* value, DataValue* value);
+int data_list_prepend(DataValue* value, DataValue* item);
 
-int data_list_append(DataValue* value, DataValue* value);
+int data_list_append(DataValue* value, DataValue* item);
 
 DataValue* data_list_get(DataValue* value, int index);
 
@@ -848,6 +1437,17 @@ unsigned long int data_hash(char* s);
 void data_dict_set(DataValue* value, char* key, DataValue* item);
 
 DataValue* data_dict_get(DataValue* value, char* key);
+
+
+// Conversion Functions
+
+DataValue* data_to_boolean(DataValue* value);
+
+DataValue* data_to_integer(DataValue* value);
+
+DataValue* data_to_decimal(DataValue* value);
+
+DataValue* data_to_string(DataValue* value);
 
 
 // Data Helper Macros
@@ -883,10 +1483,10 @@ DataValue* data_integer(int integer)
 }
 
 
-DataValue* data_number(double decimal)
+DataValue* data_decimal(double decimal)
 {
     DataValue* value = data_empty();
-    value->type = DATA_NUMBER;
+    value->type = DATA_DECIMAL;
     value->decimal = decimal;
     return value;
 }
@@ -920,18 +1520,20 @@ DataValue* data_list(DataValue* head, ...)
     value->type = DATA_LIST;
 
     value->list = runtime_alloc(sizeof(struct DataList));
-    value->list->items = runtime_alloc(sizeof(DataValue*) * 64);
+    value->list->items = runtime_alloc(sizeof(DataValue*) * DATA_DEFAULT_LIST_CAPACITY);
+    memset(value->list->items, 0, sizeof(DataValue*) * DATA_DEFAULT_LIST_CAPACITY);
     value->list->count = 0;
     value->list->capacity = DATA_DEFAULT_LIST_CAPACITY;
     value->list->available = NULL;
 
+    if (head == NULL || head->type == DATA_EMPTY) return value;
+    data_list_append(value, head);
+
     va_list args;
     va_start(args, head);
-        data_list_append(value, head);
         while (true) {
             DataValue* item = va_arg(args, DataValue*);
             if (item == NULL) break;
-            if (item->type == DATA_EMPTY) break;
             data_list_append(value, item);
         }
     va_end(args);
@@ -952,10 +1554,10 @@ DataValue* data_dict(struct DataEntry* head, ...)
     value->dict->indexes = NULL;
 
     if (head == NULL) return value;
+    data_dict_set(value, head->key, head->value);
 
     va_list args;
     va_start(args, head);
-        data_dict_set(value, head->key, head->value);
         while (true) {
             struct DataEntry* item = va_arg(args, struct DataEntry*);
             if (item == NULL) break;
@@ -966,14 +1568,16 @@ DataValue* data_dict(struct DataEntry* head, ...)
 }
 
 
-int data_list_prepend(DataValue* value, DataValue* value)
+int data_list_prepend(DataValue* value, DataValue* item)
 {
     if (value->type != DATA_LIST) return 0;
 
     struct DataList* list = value->list;
     if (list->count >= list->capacity) {
         list->capacity *= 2;
-        list->items = runtime_alloc(sizeof(DataValue*) * list->capacity);
+        DataValue** items = runtime_alloc(sizeof(DataValue**) * list->capacity);
+        for (int i = 0; i < list->count; i++) items[i] = list->items[i];
+        list->items = items;
     }
 
     if (list->items[0] != NULL)
@@ -981,31 +1585,31 @@ int data_list_prepend(DataValue* value, DataValue* value)
             list->items[i] = list->items[i - 1];
         }
 
-    list->items[0] = value;
+    list->items[0] = item;
     list->count += 1;
     return 0;
 }
 
 
-int data_list_append(DataValue* value, DataValue* value)
+int data_list_append(DataValue* value, DataValue* item)
 {
     if (value->type != DATA_LIST) return 0;
 
     struct DataList* list = value->list;
     if (list->count >= list->capacity) {
         list->capacity *= 2;
-        list->items = runtime_alloc(sizeof(DataValue*) * list->capacity);
+        DataValue** items = runtime_alloc(sizeof(DataValue**) * list->capacity);
+        for (int i = 0; i < list->count; i++) items[i] = list->items[i];
+        list->items = items;
     }
 
     int index;
     if (list->available != NULL) {
         index = list->available->index;
         list->available = list->available->next;
-    } else {
-        index = list->count++;
-    }
+    } else index = list->count++;
 
-    list->items[index] = value;
+    list->items[index] = item;
     return list->count - 1;
 }
 
@@ -1018,50 +1622,51 @@ DataValue* data_list_remove(DataValue* value, int index)
     struct DataList* list = value->list;
     if (list == NULL) return data_empty();
 
-    list->available = runtime_alloc(sizeof(struct DataIndex));
-    list->available->index = index;
-    list->available->next = list->available;
+    DataValue* item = list->items[index];
+    for (int i = index; i < list->count - 1; i++) {
+        list->items[i] = list->items[i + 1];
+    }
 
-    DataValue* value = list->items[index];
-    list->items[index] = NULL;
     list->count -= 1;
-    return value;
+    return item;
 }
 
 
 DataValue* data_list_get(DataValue* value, int index)
 {
-    if (list == NULL) return data_empty();
+    if (value == NULL) return data_empty();
     if (value->type != DATA_LIST) return data_empty();
 
     struct DataList* list = value->list;
     if (list == NULL) return data_empty();
 
-    DataValue* value = list->items[index];
-    if (value == NULL) return data_empty();
+    DataValue* item = list->items[index];
+    if (item == NULL) return data_empty();
 
-    return value;
+    return item;
 }
 
 
 void data_print_list(DataValue* value)
 {
-    if (list == NULL) return;
+    if (value == NULL) return;
     if (value->type != DATA_LIST) return;
 
     struct DataList* list = value->list;
     if (list == NULL) return;
 
     for (int i = 0; i < list->count; i++) {
-        printf("%d: ", i);
-        printf("%p", list->items[i]);
+        if (list->items[i] == NULL) continue;
+        printf("type: %d\n", list->items[i]->type);
+        // if (list->items[i]->type == DATA_EMPTY) continue;
+        // printf("%s", list->items[i]->string);
         printf("\n");
     }
 }
 
 void data_print_dict(DataValue* value)
 {
-    if (dict == NULL) return;
+    if (value == NULL) return;
     if (value->type != DATA_DICT) return;
     struct DataDict* dict = value->dict;
 
@@ -1105,20 +1710,25 @@ void data_dict_set(DataValue* value, char* key, DataValue* item)
 {
     if (value->type != DATA_DICT) return;
 
-    struct DataDict* dict = value->dict;
-    struct DataEntry* entry = data_entry(key, item);
 
-    unsigned long long int hash = entry->hash;
+    struct DataDict* dict = value->dict;
+    if (dict->count >= dict->capacity) {
+        dict->capacity *= 2;
+        struct DataEntry** entries = runtime_alloc(sizeof(struct DataEntry**) * dict->capacity);
+        for (int i = 0; i < dict->count; i++) entries[i] = dict->entries[i];
+        dict->entries = entries;
+    }
+
     struct DataIndex* index = runtime_alloc(sizeof(struct DataIndex));
+    struct DataEntry* entry = data_entry(key, item);
     index->next = dict->indexes;
-    index->index = hash % dict->capacity;
+    index->index = entry->hash % dict->capacity;
     while (dict->entries[index->index] != NULL) {
-        if (dict->entries[index->index]->hash == hash) {
+        if (dict->entries[index->index]->hash == entry->hash) {
             dict->entries[index->index]->value = item;
             return;
         }
-        index->index = (5 * index->index + hash + 1) % dict->capacity;
-        hash >>= 5;
+        index->index = (index->index + 1) % dict->capacity;
     }
 
     dict->entries[index->index] = entry;
@@ -1138,13 +1748,399 @@ DataValue* data_dict_get(DataValue* value, char* key)
     while (dict->entries[index] != NULL) {
         if (dict->entries[index]->hash == hash) 
             return dict->entries[index]->value;
-        index = (5 * index + hash + 1) % dict->capacity;
-        hash >>= 5;
+        index = (index + 1) % dict->capacity;
     }
 
     return dict->entries[index]->value;
 }
 
 
+DataValue* data_to_boolean(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_BOOLEAN: return value;
+    case DATA_INTEGER: return data_boolean(value->integer);
+    case DATA_DECIMAL: return data_boolean(value->decimal);
+    case DATA_STRING: return data_boolean(strcmp(value->string, "true") == 0);
+    case DATA_TUPLE: return data_boolean(data_to_boolean(value->tuple->left)->boolean && data_to_boolean(value->tuple->right)->boolean);
+    case DATA_LIST: return data_boolean(value->list->count > 0);
+    case DATA_DICT: return data_boolean(value->list->count > 0);
+    default: return data_boolean(false);
+    }
+}
+
+
+DataValue* data_to_integer(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_INTEGER: return value;
+    case DATA_BOOLEAN: return data_integer(value->boolean);
+    case DATA_DECIMAL: return data_integer(value->decimal);
+    case DATA_STRING: return data_integer(atoi(value->string));
+    case DATA_TUPLE: return data_integer(data_to_integer(value->tuple->left)->integer + data_to_integer(value->tuple->right)->integer);
+    case DATA_LIST: return data_integer(value->list->count);
+    case DATA_DICT: return data_integer(value->dict->count);
+    default: return data_integer(0);
+    }
+}
+
+
+DataValue* data_to_decimal(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_DECIMAL: return value;
+    case DATA_BOOLEAN: return data_decimal(value->boolean);
+    case DATA_INTEGER: return data_decimal(value->integer);
+    case DATA_STRING: return data_decimal(atof(value->string));
+    case DATA_TUPLE: return data_decimal(data_to_decimal(value->tuple->left)->decimal + data_to_decimal(value->tuple->right)->decimal);
+    case DATA_LIST: return data_decimal(value->list->count);
+    case DATA_DICT: return data_decimal(value->dict->count);
+    default: return data_decimal(0);
+    }
+}
+
+
+DataValue* data_to_string(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_STRING: return value;
+    case DATA_BOOLEAN: return data_string(value->boolean ? "true" : "false");
+    case DATA_INTEGER: return data_string(runtime_sprintf("%d", value->integer));
+    case DATA_DECIMAL: return data_string(runtime_sprintf("%f", value->decimal));
+
+    case DATA_TUPLE: {
+        char* left = data_to_string(value->tuple->left)->string;
+        char* right = data_to_string(value->tuple->right)->string;
+        return data_string(runtime_sprintf("(%s, %s)", left, right));
+    }
+
+    case DATA_LIST: {
+        char buf[2048] = {0};
+        strcat(buf, "[");
+        for (int i = 0; i < value->list->count; i++) {
+            if (i > 0) strcat(buf, ", ");
+            strcat(buf, data_to_string(value->list->items[i])->string);
+        }
+        strcat(buf, "]");
+        return data_string(buf);
+    }
+
+    case DATA_DICT: {
+        int count = 0;
+        char buf[2048] = {0};
+        count += snprintf(buf, sizeof(buf), "{");
+        for (int i = 0; i < value->dict->capacity; i++) {
+            if (value->dict->entries[i] == NULL) continue;
+            char* key = value->dict->entries[i]->key;
+            char* str = data_to_string(value->dict->entries[i]->value)->string;
+            count += snprintf(buf + count, sizeof(buf) - count, "\"%s\": %s,", key, str);
+        }
+        if (count > 1) buf[count - 1] = '}';
+        else strcat(buf, "}");
+        return data_string(buf);
+    }
+
+    default: return data_string("");
+    }
+}
+
+
 #endif // DATA_IMPLEMENTATION
 #endif // DATA_HEADER
+
+/** encoding.h - Provides a set of functions for encoding and decoding data
+    from popular encoding formats like JSON.
+
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-08
+    @version  0.1.1 
+    @license: MIT
+*/
+
+
+#ifndef ENCODING_HEADER
+#define ENCODING_HEADER
+
+
+// JSON functions
+char* encoding_to_json(DataValue* value);
+
+typedef struct EncodingLexer {
+    char* input;
+    int start;
+    int count;
+} EncodingLexer;
+
+
+DataValue* encoding_from_json(char* input);
+
+DataValue* encoding_next_value(EncodingLexer* lexer);
+
+DataValue* encoding_empty_from_json(EncodingLexer*);
+
+DataValue* encoding_boolean_from_json(EncodingLexer*);
+
+DataValue* encoding_number_from_json(EncodingLexer*);
+
+DataValue* encoding_string_from_json(EncodingLexer*);
+
+DataValue* encoding_list_from_json(EncodingLexer*);
+
+DataValue* encoding_dict_from_json(EncodingLexer*);
+
+
+
+#ifdef ENCODING_IMPLEMENTATION
+
+
+#include <ctype.h>
+
+
+char* encoding_to_json(DataValue* value)
+{
+    switch (value->type) {
+    case DATA_BOOLEAN: return value->boolean ? "true" : "false";
+    case DATA_INTEGER: return runtime_sprintf("%d", value->integer);
+    case DATA_DECIMAL: return runtime_sprintf("%f", value->decimal);
+    case DATA_STRING: return runtime_sprintf("\"%s\"", value->string);
+
+    case DATA_TUPLE: {
+        char* left = encoding_to_json(value->tuple->left);
+        char* right = encoding_to_json(value->tuple->right);
+        int len = snprintf(NULL, 0, "[%s, %s]", left, right) + 1;
+        char* res = runtime_alloc(len);
+        snprintf(res, len, "[%s, %s]", left, right);
+        return res;
+    }
+
+    case DATA_LIST: {
+        char buf[2048] = {0};
+        buf[0] = '[';
+        for (int i = 0; i < value->list->count; i++) {
+            if (i > 0) strcat(buf, ", ");
+            if (value->list->items[i] == NULL) continue;
+            strcat(buf, encoding_to_json(value->list->items[i]));
+        }
+        strcat(buf, "]");
+        int count = strlen(buf);
+        char* res = runtime_alloc(count + 1);
+        strncpy(res, buf, count);
+        res[count] = '\0';
+        return res;
+    }
+
+    case DATA_DICT: {
+        int count = 0;
+        char buf[2048] = {0};
+        count += snprintf(buf, sizeof(buf), "{");
+        for (int i = 0; i < value->dict->capacity; i++) {
+            if (value->dict->entries[i] == NULL) continue;
+            char* key = value->dict->entries[i]->key;
+            char* str = encoding_to_json(value->dict->entries[i]->value);
+            count += snprintf(buf + count, sizeof(buf) - count, "\"%s\": %s,", key, str);
+        }
+        if (count > 1) buf[count - 1] = '}';
+        else strcat(buf, "}");
+        count = strlen(buf);
+        char* res = runtime_alloc(count + 1);
+        strncpy(res, buf, count);
+        res[count] = '\0';
+        return res;
+    }
+
+    default: return "null";
+    }
+}
+
+
+// Private helper methods used for parsing.
+void _encoding_skip_whitespace(EncodingLexer* lexer)
+{ while (isspace(lexer->input[lexer->count])) lexer->count++; }
+
+
+char _encoding_peek(EncodingLexer* lexer)
+{ return lexer->input[lexer->count]; }
+
+
+char _encoding_take(EncodingLexer* lexer)
+{ return lexer->input[lexer->count++]; }
+
+
+char* _encoding_emit(EncodingLexer* lexer)
+{
+    int count = lexer->count - lexer->start;
+    char* value = runtime_alloc(count + 1);
+    strncpy(value, lexer->input + lexer->start, count);
+    value[count] = '\0';
+    lexer->start = lexer->count;
+    return value;
+}
+
+
+DataValue* encoding_from_json(char* input)
+{
+    EncodingLexer lexer = {.input = input, .count = 0};
+    _encoding_skip_whitespace(&lexer);
+    return encoding_next_value(&lexer);
+}
+
+
+DataValue* encoding_next_value(EncodingLexer* lexer)
+{
+    char next = _encoding_peek(lexer);
+    if (next == 'n') return encoding_empty_from_json(lexer);
+    if (next == 't' || next == 'f') return encoding_boolean_from_json(lexer);
+    if (isdigit(next) || next == '-' || next == '.') return encoding_number_from_json(lexer);
+    if (next == '"') return encoding_string_from_json(lexer);
+    if (next == '[') return encoding_list_from_json(lexer);
+    if (next == '{') return encoding_dict_from_json(lexer);
+    return data_empty();
+}
+
+
+
+DataValue* encoding_string_from_json(EncodingLexer* lexer)
+{
+    if (_encoding_peek(lexer) != '"') return data_empty();
+    _encoding_take(lexer);
+    lexer->start = lexer->count;
+
+    while (_encoding_peek(lexer) != '"' && _encoding_peek(lexer) != '\0')
+        _encoding_take(lexer);
+
+    if (_encoding_peek(lexer) != '"') return data_empty();
+    
+    char* str = _encoding_emit(lexer);
+    _encoding_take(lexer);
+    return data_string(str);
+}
+
+
+DataValue* encoding_list_from_json(EncodingLexer* lexer)
+{
+    if (_encoding_peek(lexer) != '[') return data_empty();
+    _encoding_take(lexer); // Consume '['.
+    
+    DataValue* list = data_list(NULL);
+    _encoding_skip_whitespace(lexer);
+    
+    if (_encoding_peek(lexer) == ']') {
+        _encoding_take(lexer);
+        return list;
+    }
+    
+    while (true) {
+        DataValue* item = encoding_next_value(lexer);
+        data_list_append(list, item);
+        _encoding_skip_whitespace(lexer);
+        char next = _encoding_peek(lexer);
+        if (next == ',') {
+            _encoding_take(lexer);
+            _encoding_skip_whitespace(lexer);
+        } else if (next == ']') {
+            _encoding_take(lexer);
+            break;
+        } else break;
+    }
+
+    return list;
+}
+
+
+DataValue* encoding_dict_from_json(EncodingLexer* lexer)
+{
+    if (_encoding_peek(lexer) != '{') return data_empty();
+    _encoding_take(lexer);
+    
+    DataValue* dict = data_dict(NULL);
+    _encoding_skip_whitespace(lexer);
+    
+    if (_encoding_peek(lexer) == '}') {
+        _encoding_take(lexer);
+        return dict;
+    }
+    
+    while (true) {
+        _encoding_skip_whitespace(lexer);
+
+        DataValue* key_val = encoding_string_from_json(lexer);
+        if (!key_val) return data_empty();
+        char* key = key_val->string;
+        
+        _encoding_skip_whitespace(lexer);
+        if (_encoding_take(lexer) != ':') return data_empty();
+        
+        _encoding_skip_whitespace(lexer);
+        DataValue* value = encoding_next_value(lexer);
+        data_dict_set(dict, key, value);
+        
+        _encoding_skip_whitespace(lexer);
+        char next = _encoding_peek(lexer);
+        if (next == ',') _encoding_take(lexer);
+        else if (next == '}') {
+            _encoding_take(lexer);
+            break;
+        } else break;
+    }
+    return dict;
+}
+
+
+DataValue* encoding_empty_from_json(EncodingLexer *lexer)
+{
+    if (_encoding_take(lexer) != 'n') return data_empty();
+    if (_encoding_take(lexer) != 'u') return data_empty();
+    if (_encoding_take(lexer) != 'l') return data_empty();
+    if (_encoding_take(lexer) != 'l') return data_empty();
+    _encoding_emit(lexer);
+    return data_empty();
+}
+
+DataValue* encoding_boolean_from_json(EncodingLexer *lexer)
+{
+    switch (_encoding_peek(lexer)) {
+    case 't': 
+        if (_encoding_take(lexer) != 't') return data_empty();
+        if (_encoding_take(lexer) != 'r') return data_empty();
+        if (_encoding_take(lexer) != 'u') return data_empty();
+        if (_encoding_take(lexer) != 'e') return data_empty();
+        _encoding_emit(lexer);
+        return data_boolean(true);
+    case 'f': 
+        if (_encoding_take(lexer) != 'f') return data_empty();
+        if (_encoding_take(lexer) != 'a') return data_empty();
+        if (_encoding_take(lexer) != 'l') return data_empty();
+        if (_encoding_take(lexer) != 's') return data_empty();
+        if (_encoding_take(lexer) != 'e') return data_empty();
+        _encoding_emit(lexer);
+        return data_boolean(false);
+    default: return data_empty();
+    }
+}
+
+
+DataValue* encoding_number_from_json(EncodingLexer* lexer)
+{
+    lexer->start = lexer->count;
+    if (_encoding_peek(lexer) == '-') _encoding_take(lexer);
+    
+    while (isdigit(_encoding_peek(lexer)))
+        _encoding_take(lexer);
+    
+    if (_encoding_peek(lexer) == '.') {
+        _encoding_take(lexer);
+        while (isdigit(_encoding_peek(lexer)))
+            _encoding_take(lexer);
+    }
+    
+    char* numStr = _encoding_emit(lexer);
+    double value = strtod(numStr, NULL);
+    return data_decimal(value);
+}
+
+
+
+
+
+#endif // ENCODING_IMPLEMENTATION
+#endif // ENCODING_HEADER

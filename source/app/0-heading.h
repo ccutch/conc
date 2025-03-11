@@ -30,6 +30,9 @@
     DataTypes --- Provides a set of data types that are used to marshall and
                   unmarshall data from the database, templates, and APIs.
 
+    Encoding ---- Provides a set of functions for encoding and decoding data
+                  from popular encoding formats like JSON.
+
     Template ---- Provides a templating engine that will allow us to generate
                   HTML from our data structures, inspired by Go.
 

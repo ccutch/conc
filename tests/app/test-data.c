@@ -13,8 +13,29 @@
 #include <stdio.h>
 
 
+void test_in_runtime(void)
+{
+    DataValue* empty = data_empty();
+    assert(empty->type == DATA_EMPTY);
+    char* s = runtime_sprintf("✅ test_in_runtime");
+    printf("%s\n", s);
+
+
+    for (int i = 0; i < 1000; i++)
+        empty = data_empty();
+
+
+    int size = runtime_memory()->count;
+    printf("runtime_memory()->count: %d\n", size);
+}
+
+
 int main(void)
 {
+
+    runtime_run(test_in_runtime());
+    runtime_run(test_in_runtime());
+
     DataValue* empty = data_empty();
     assert(empty->type == DATA_EMPTY);
 
@@ -84,7 +105,6 @@ int main(void)
     assert(item->type == DATA_STRING);
     assert(strcmp(item->string, "World") == 0);
 
-
     //overwrite key
     data_dict_set(dict, "Hello", data_string("World2"));
     assert(dict->dict->count == 1);
@@ -105,15 +125,23 @@ int main(void)
     assert(item->type == DATA_STRING);
     assert(strcmp(item->string, "Bar") == 0);
 
-
     DataValue* bigList = data_list(DATA_END);
     for (int i = 0; i < 1000; i++) // Reallocate 5 times
         data_list_append(bigList, data_string("Hello"));
     assert(bigList->list->count == 1000);
     assert(bigList->list->capacity == 16 * DATA_DEFAULT_LIST_CAPACITY);
 
-
     data_list_remove(bigList, 0);
+
+
+    DataValue* dict2 = data_dict(
+        data_entry("Hello", data_string("World")),
+    DATA_END);
+
+    for (int i = 0; i < 1000; i++) {
+        char* key = runtime_sprintf("Hello-%d", i);
+        data_dict_set(dict2, key, data_string("World"));
+    }
 
     // Test Conversion Functions
     assert(data_to_boolean(data_boolean(true))->boolean == true);
@@ -144,7 +172,6 @@ int main(void)
     assert(data_to_decimal(data_list(data_string("1"), data_string("2"), NULL))->decimal == 2.0);
     assert(data_to_decimal(data_dict(data_entry("1", data_string("2")), NULL))->decimal == 1.0);
 
-
     assert(strcmp(data_to_string(data_boolean(true))->string, "true") == 0);
     assert(strcmp(data_to_string(data_boolean(false))->string,"false") == 0);
     assert(strcmp(data_to_string(data_integer(1))->string, "1") == 0);
@@ -154,7 +181,7 @@ int main(void)
     assert(strcmp(data_to_string(data_list(data_string("1"), data_string("2"), NULL))->string, "[1, 2]") == 0);
     assert(strcmp(data_to_string(data_dict(data_entry("1", data_string("2")), NULL))->string, "{\"1\": 2}") == 0);
 
-
+    int res = runtime_main();
     printf("✅ All tests passed!\n");
-    return EXIT_SUCCESS;
+    return res;
 }

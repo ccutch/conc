@@ -98,6 +98,6 @@ int main()
     runtime_run(run_command());
 
     int res = runtime_main();
-    if (res == 0) printf("✅ All tests passed!\n");
+    if (res == 0) printf("\n✅ All tests passed!\n");
     return res;
 }
