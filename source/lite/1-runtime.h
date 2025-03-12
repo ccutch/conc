@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <poll.h>
+#include <stdarg.h>
 
 
 #define RUNTIME_DEFAULT_ENGINE_CAPACITY 10
@@ -63,6 +64,8 @@ uint runtume_memory_size(void);
 void *runtime_alloc(uint size);
 
 void *runtime_realloc(void *ptr, uint size);
+
+char *runtime_sprintf(char *fmt, ...);
 
 void runtime_cleanup(void);
 
@@ -173,6 +176,28 @@ void *runtime_realloc(void *ptr, uint size)
    if (allocation->start == NULL) return NULL;
 
    return allocation->start;
+}
+
+
+char *runtime_sprintf(char *fmt, ...)
+{
+    va_list args;
+
+    // Count the size of the string to allocate memory
+    va_start(args, fmt);
+        int count = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+
+    // Allocating memory in our current process arena
+    char *string = runtime_alloc(count + 1);
+    if (string == NULL) return NULL;
+
+    // Performing actual print opperation to the string
+    va_start(args, fmt);
+        vsnprintf(string, count + 1, fmt, args);
+    va_end(args);
+
+    return string;
 }
 
 

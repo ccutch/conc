@@ -1,36 +1,64 @@
 /** network.h - Provides a non-blocking TCP server, a basic HTTP interface,
                 and a path-based router for handling incoming requests.
 
-    Revised to correctly accept HTTP requests.
-    @author:
-    @date:    2025-03-08
+    @author:  Connor McCutcheon <connor.mccutcheon95@gmail.com>
+    @date:    2025-03-11
     @version  0.1.2
     @license: MIT
 */
 
 
-#ifndef NETWORK_HEADER
-#define NETWORK_HEADER
+#ifndef NETWORK_H
+#define NETWORK_H
 
+
+// Representation of an HTTP header with a link to the next header
 typedef struct NetworkHeader {
     struct NetworkHeader* next;
     char *key;
     char *value;
 } NetworkHeader;
 
+// Representation of an HTTP request with inbound and outbound data
 typedef struct NetworkRequest {
     int conn_fd;
+    char *protocol;
     char *method;
     char *path;
+    int req_length;
+    int res_status;
     NetworkHeader *req_headers;
     NetworkHeader *res_headers;
-    int content_length;
-    int res_status;
 } NetworkRequest;
 
-void network_listen_tcp(int port, void (*handler)(int));
+// Endpoint handler for a request with a callback function
+typedef struct NetworkEndpoint {
+    const char *method;
+    const char *path;
+    void (*callback)(NetworkRequest *req);
+} NetworkEndpoint;
 
-void network_listen(int port, void (*handler)(NetworkRequest*));
+
+// Network Router stores multiple endpoints and routes requests
+typedef struct NetworkRouter {
+    int count;
+    int capacity;
+    NetworkEndpoint **endpoints;
+} NetworkRouter;
+
+
+// Start network server with default network router
+void network_get(const char *path, void (*callback)(NetworkRequest *req));
+
+// void network_post(const char *method, const char *path, void (*callback)(NetworkRequest *req));
+
+// void network_put(const char *method, const char *path, void (*callback)(NetworkRequest *req));
+
+// void network_patch(const char *method, const char *path, void (*callback)(NetworkRequest *req));
+
+// void network_delete(const char *method, const char *path, void (*callback)(NetworkRequest *req));
+
+void network_listen(int port);
 
 int network_read(int fd, char *buf, int len);
 
@@ -38,21 +66,15 @@ int network_read_until(int fd, char *buf, int len, const char *delim);
 
 int network_write(int fd, const char *buf, int len);
 
-// or NULL if the request is malformed.
-NetworkRequest* network_parse_http(int fd);
-
-// Returns a header value from the incoming request headers.
 char *network_get_header(NetworkRequest *req, const char *header);
 
-// Sets a header in the response headers.
 void network_set_header(NetworkRequest *req, const char *header, const char *value);
 
-// Writes the HTTP response head to the connection. Once written, headers can no longer be modified.
 int network_write_head(NetworkRequest *req, int status, const char *message);
 
-// Writes a response body to the connection. If the head has not yet been written,
-// this function writes a default 200 OK response head.
 int network_write_body(NetworkRequest *req, const char *body, int len);
+
+void network_not_found(NetworkRequest*);
 
 
 #ifdef NETWORK_IMPLEMENTATION
@@ -65,14 +87,125 @@ int network_write_body(NetworkRequest *req, const char *body, int len);
 #include <unistd.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <stdbool.h>
 
 
+static NetworkRouter router = {
+    .count = 0,
+    .capacity = 0,
+    .endpoints = NULL,
+};
 
-void network_listen_tcp(int port, void (*handler)(int))
+
+static NetworkEndpoint network_not_found_endpoint = {
+    .method = "",
+    .path = "",
+    .callback = network_not_found,
+};
+
+
+static void _network_router_init(void)
+{
+    if (router.count >= router.capacity) {
+        router.capacity += 10;
+        router.endpoints = realloc(router.endpoints, sizeof(NetworkEndpoint) * router.capacity);
+    }
+}
+
+
+void network_get(const char *path, void (*callback)(NetworkRequest *req))
+{
+    _network_router_init();
+    NetworkEndpoint *endpoint = runtime_alloc(sizeof(NetworkEndpoint));
+    endpoint->method = "GET";
+    endpoint->path = path;
+    endpoint->callback = callback;
+    router.endpoints[router.count++] = endpoint;
+}
+
+
+static char* str_dup(const char *s) {
+    if (!s) return NULL;
+    size_t len = strlen(s);
+    char *copy = runtime_alloc(len + 1);
+    memcpy(copy, s, len + 1);
+    return copy;
+}
+
+
+static NetworkRequest* _network_parse_http(int fd)
+{
+    char buf[2048] = {0};
+    // Read until the end of the header block.
+    int n = network_read_until(fd, buf, sizeof(buf) - 1, "\r\n\r\n");
+    if (n <= 0) return NULL;
+
+    char *line_save;
+    char *line = strtok_r(buf, "\r\n", &line_save);
+    if (!line) return NULL;
+
+    printf("Parsing: %s\n", line);
+
+    char *req_save;
+    char *method = strtok_r(line, " ", &req_save);
+    char *path   = strtok_r(NULL, " ", &req_save);
+    char *protocol = strtok_r(NULL, " ", &req_save);
+    if (!method || !path) return NULL;
+
+    printf("Handling: %s %s\n", method, path);
+    NetworkRequest *req = runtime_alloc(sizeof(NetworkRequest));
+    req->conn_fd = fd;
+    req->protocol = str_dup(protocol);
+    req->method = str_dup(method);
+    req->path   = str_dup(path);
+    req->req_headers = NULL;
+    req->res_headers = NULL;
+    req->req_length = 0;
+    req->res_status = 0;
+
+    while ((line = strtok_r(NULL, "\r\n", &line_save)) != NULL) {
+        if (strlen(line) == 0) break;
+
+        char *colon = strchr(line, ':');
+        if (!colon) continue;
+        *colon = '\0';
+        char *key = line;
+        char *value = colon + 1;
+        while (*value == ' ') value++;
+
+        NetworkHeader *header = runtime_alloc(sizeof(NetworkHeader));
+        header->key = str_dup(key);
+        header->value = str_dup(value);
+        header->next = req->req_headers;
+        req->req_headers = header;
+
+        if (strcasecmp(header->key, "Content-Length") == 0)
+            req->req_length = atoi(header->value);
+    }
+
+    return req;
+}
+
+
+static NetworkEndpoint *_network_lookup_endpoint(NetworkRequest *req)
+{
+    printf("Looking for endpoint for %s %s\n", req->method, req->path);
+    for (int i = 0; i < router.count; i++) {
+        NetworkEndpoint *endpoint = router.endpoints[i];
+        printf("Testing endpoint %s %s\n", endpoint->method, endpoint->path);
+        if (strcasecmp(endpoint->method, req->method) == 0 && strcasecmp(endpoint->path, req->path) == 0)
+            return endpoint;
+        printf("Testing Failed\n");
+    }
+    return &network_not_found_endpoint;
+}
+
+
+void network_listen(int port)
 {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
-        runtime_logf("failed to create socket on port %d", port);
+        printf("failed to create socket on port %d", port);
         return;
     }
 
@@ -85,117 +218,56 @@ void network_listen_tcp(int port, void (*handler)(int))
     };
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        runtime_logf("failed to bind socket on port %d", port);
+        printf("failed to bind socket on port %d", port);
         close(server_fd);
         return;
     }
 
     if (listen(server_fd, SOMAXCONN) < 0) {
-        runtime_logf("failed to listen on socket on port %d", port);
+        printf("failed to listen on socket on port %d", port);
         close(server_fd);
         return;
     }
 
-    runtime_unblock_fd(server_fd);
+    runtime_prepare(server_fd);
+
     printf("Listening on port %d\n", port);
     while (true) {
+        runtime_reading(server_fd);
         socklen_t addr_size = sizeof(addr);
         int conn_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_size);
         if (conn_fd < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_read(server_fd);
                 continue;
             }
-            runtime_logf("failed to accept connection on port %d", port);
+            printf("failed to accept connection on port %d", port);
             return;
         }
-        runtime_unblock_fd(conn_fd);
-        runtime_start((void*)handler, (void*)(long)conn_fd);
+        NetworkRequest *req = _network_parse_http(conn_fd);
+        if (req == NULL) continue;
+        NetworkEndpoint *endpoint = _network_lookup_endpoint(req);
+        if (endpoint == NULL) continue;
+        runtime_start((void*)endpoint->callback, (void*)req);
     }
 }
-
-
-void network_listen(int port, void (*handler)(NetworkRequest*))
-{
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        runtime_logf("failed to create socket on port %d", port);
-        return;
-    }
-
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    struct sockaddr_in addr = {
-        .sin_family = AF_INET,
-        .sin_addr.s_addr = INADDR_ANY,
-        .sin_port = htons(port),
-    };
-
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        runtime_logf("failed to bind socket on port %d", port);
-        close(server_fd);
-        return;
-    }
-
-    if (listen(server_fd, SOMAXCONN) < 0) {
-        runtime_logf("failed to listen on socket on port %d", port);
-        close(server_fd);
-        return;
-    }
-
-    runtime_unblock_fd(server_fd);
-    printf("Listening on port %d\n", port);
-    while (true) {
-        socklen_t addr_size = sizeof(addr);
-        int conn_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_size);
-        if (conn_fd < 0) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_read(server_fd);
-                continue;
-            }
-            runtime_logf("failed to accept connection on port %d", port);
-            return;
-        }
-        runtime_unblock_fd(conn_fd);
-        NetworkRequest *req = network_parse_http(conn_fd);
-        if (req == NULL) {
-            close(conn_fd);
-            continue;
-        }
-        runtime_start((void*)handler, (void*)req);
-    }
-}
-
-// int network_read(int fd, char *buf, int size)
-// {
-//     return network_read_until(fd, buf, size, "\0");
-// }
 
 
 int network_read(int fd, char *buf, int n) {
     int total = 0;
 
     while (total < n) {
-        printf("total: %d\n", total);
-        printf("n: %d\n", n);
         int r = read(fd, buf + total, n - total);
-        printf("r: %d\n", r);
         if (r < 0) {
             // If no data is available, only yield if we haven't read anything yet.
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                printf("ewouldblock: %d\n", EWOULDBLOCK);
-                printf("eagain: %d\n", EAGAIN);
-                printf("errno: %d\n", errno);
-                printf("total: %d\n", total);
                 if (total > 0) {
                     // We already have some data, so return what we got.
                     break;
                 }
                 // Otherwise, yield until more data is ready.
-                runtime_read(fd);
+                runtime_reading(fd);
                 continue;
             }
-            runtime_logf("failed to read from fd %d", fd);
             return -1;
         } else if (r == 0) {
             // Connection closed.
@@ -218,10 +290,10 @@ int network_read_until(int fd, char *buf, int size, const char *delim)
         int n = read(fd, buf + total_read, size - 1 - total_read);
         if (n < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_read(fd);
+                runtime_reading(fd);
                 continue;
             }
-            runtime_logf("failed to read from fd %d", fd);
+            printf("failed to read from fd %d", fd);
             return -1;
         } else if (n == 0) break;
 
@@ -243,73 +315,15 @@ int network_write(int fd, const char *buf, int size)
         int n = write(fd, buf + total_written, size - total_written);
         if (n < 0) {
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                runtime_write(fd);
+                runtime_writing(fd);
                 continue;
             }
-            runtime_logf("failed to write to fd %d", fd);
+            printf("failed to write to fd %d", fd);
             return -1;
         }
         total_written += n;
     }
     return total_written;
-}
-
-
-static char* str_dup(const char *s) {
-    if (!s) return NULL;
-    size_t len = strlen(s);
-    char *copy = runtime_alloc(len + 1);
-    memcpy(copy, s, len + 1);
-    return copy;
-}
-
-
-NetworkRequest* network_parse_http(int fd)
-{
-    char buf[2048] = {0};
-    // Read until the end of the header block.
-    int n = network_read_until(fd, buf, sizeof(buf) - 1, "\r\n\r\n");
-    if (n <= 0) return NULL;
-
-    char *line_save;
-    char *line = strtok_r(buf, "\r\n", &line_save);
-    if (!line) return NULL;
-
-    char *req_save;
-    char *method = strtok_r(line, " ", &req_save);
-    char *path   = strtok_r(NULL, " ", &req_save);
-    if (!method || !path) return NULL;
-
-    NetworkRequest *req = runtime_alloc(sizeof(NetworkRequest));
-    req->conn_fd = fd;
-    req->method = str_dup(method);
-    req->path   = str_dup(path);
-    req->req_headers = NULL;
-    req->res_headers = NULL;
-    req->content_length = 0;
-    req->res_status = 0;
-
-    while ((line = strtok_r(NULL, "\r\n", &line_save)) != NULL) {
-        if (strlen(line) == 0) break;
-
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-        *colon = '\0';
-        char *key = line;
-        char *value = colon + 1;
-        while (*value == ' ') value++;
-
-        NetworkHeader *header = runtime_alloc(sizeof(NetworkHeader));
-        header->key = str_dup(key);
-        header->value = str_dup(value);
-        header->next = req->req_headers;
-        req->req_headers = header;
-
-        if (strcasecmp(header->key, "Content-Length") == 0)
-            req->content_length = atoi(header->value);
-    }
-
-    return req;
 }
 
 
@@ -383,5 +397,15 @@ int network_write_body(NetworkRequest *req, const char *body, int len)
     return total_written;
 }
 
+
+void network_not_found(NetworkRequest *req)
+{
+    network_set_header(req, "Content-Type", "text/plain");
+    const char *body = "not found";
+    network_write_head(req, 404, "Not Found");
+    network_write_body(req, body, strlen(body));
+}
+
+
 #endif // NETWORK_IMPLEMENTATION
-#endif // NETWORK_HEADER
+#endif // NETWORK_H
