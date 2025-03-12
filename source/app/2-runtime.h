@@ -123,16 +123,12 @@ void* runtime_alloc(int size)
     }
 
     // Allocate memory using the Memory feature
-    printf("runtime_alloc: %p\n", fiber->memory);
-    printf("runtime_alloc: %d\n", size);
     return memory_alloc(fiber->memory, size);
 }
 
 
 int runtime_unblock_fd(int fd)
-{
-    return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-}
+{ return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK); }
 
 
 void runtime_start(void (*fn)(void*), void *arg)
